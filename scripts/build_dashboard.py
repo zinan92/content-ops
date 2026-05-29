@@ -3240,6 +3240,62 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
       commandBox.textContent = command || '没有下一步命令';
       commandBox.style.display = 'block';
     }}
+    function serverStartHint() {{
+      return '请先启动本地 workbench server：\\n' + serverLaunchCommand;
+    }}
+    async function readActionResponse(res, label = '动作') {{
+      const text = await res.text();
+      let data = null;
+      try {{
+        data = text ? JSON.parse(text) : null;
+      }} catch (error) {{
+        data = {{
+          ok: false,
+          status: 'invalid_json',
+          message: `${{label}} 返回了非 JSON 响应。`,
+          raw: text.slice(0, 1200)
+        }};
+      }}
+      if (!data || typeof data !== 'object') {{
+        data = {{ok: false, status: 'empty_response', message: `${{label}} 没有返回结构化结果。`}};
+      }}
+      if (!res.ok && data.ok !== false) {{
+        data.ok = false;
+        data.status = data.status || `http_${{res.status}}`;
+        data.message = data.message || `${{label}} 请求失败（HTTP ${{res.status}}）。`;
+      }}
+      return data;
+    }}
+    async function actionFetch(endpoint, payload = {{}}, options = {{}}) {{
+      const label = options.label || '动作';
+      if (!isActionServerAvailable()) {{
+        const data = {{ok: false, status: 'server_not_available', message: serverStartHint()}};
+        showCommand(data.message);
+        return data;
+      }}
+      showCommand(options.startMessage || `${{label}} 已开始，正在等待本地 workbench 返回结果...`);
+      try {{
+        const res = await fetch(endpoint, {{
+          method: 'POST',
+          headers: {{'content-type': 'application/json'}},
+          body: JSON.stringify(payload)
+        }});
+        const data = await readActionResponse(res, label);
+        return data;
+      }} catch (error) {{
+        const data = {{
+          ok: false,
+          status: 'request_failed',
+          message: `${{label}} 请求失败：${{error?.message || error}}`
+        }};
+        showCommand(formatActionResult(data));
+        return data;
+      }}
+    }}
+    window.addEventListener('unhandledrejection', event => {{
+      const reason = event.reason;
+      showCommand(`前端动作失败：${{reason?.message || reason || '未知错误'}}`);
+    }});
     function openLightbox(images, index = 0, label = '') {{
       lightboxImages = images || [];
       lightboxIndex = Math.max(0, Math.min(index, lightboxImages.length - 1));
@@ -3451,6 +3507,7 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
       if (data.clipboard_chars) lines.push(`${{data.status === 'handoff_dry_run' ? '可写入剪贴板' : '已写入剪贴板'}}：${{data.clipboard_chars}} 字符`);
       if (data.draft_url) lines.push(`平台草稿：${{data.draft_url}}`);
       if (data.local_id) lines.push(`本地草稿：${{data.local_id}}`);
+      if (data.next_action && data.next_action.label) lines.push(`下一步：${{data.next_action.label}}`);
       if (!data.ok && data.next_step) lines.push(`下一步：${{data.next_step}}`);
       if (!data.ok && data.error) lines.push(`错误：${{data.error}}`);
       return lines.join('\\n');
@@ -3899,12 +3956,10 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
       if (!options.skipConfirm && !confirm(`准备 ${{label}} 通道？\\n\\n这可能会启动本地服务、打开登录页或安装本地 runtime，但不会发布内容。`)) return;
       showCommand(`正在打开 ${{label}} 登录/授权流程...`);
       try {{
-        const res = await fetch('/api/actions/prepare-channel', {{
-          method: 'POST',
-          headers: {{'content-type': 'application/json'}},
-          body: JSON.stringify({{platform: platformId}})
+        const data = await actionFetch('/api/actions/prepare-channel', {{platform: platformId}}, {{
+          label: `${{label}} 登录/授权`,
+          startMessage: `正在打开 ${{label}} 登录/授权流程...`
         }});
-        const data = await res.json();
         showCommand(`${{label}} 通道准备动作已执行。正在重新检查全部通道。\\n${{data.next_step || data.message || data.status || ''}}`);
         if (data.auth_qrcodes || data.login_sessions) renderAuthQrcodes(data.auth_qrcodes || {{}}, data.login_sessions || {{}});
         refreshActionHistory();
@@ -4440,16 +4495,14 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
       }};
       mergeMigrationRuntime(sourceContentId, running);
       try {{
-        const res = await fetch('/api/actions/video-migration/run', {{
-          method: 'POST',
-          headers: {{'content-type': 'application/json'}},
-          body: JSON.stringify({{
-            source_content_id: sourceContentId,
-            publish_mode: 'public',
-            confirmed: true
-          }})
+        const data = await actionFetch('/api/actions/video-migration/run', {{
+          source_content_id: sourceContentId,
+          publish_mode: 'public',
+          confirmed: true
+        }}, {{
+          label: '一键视频搬运',
+          startMessage: '一键视频搬运已开始：正在检查 视频号 / Bilibili / YouTube。'
         }});
-        const data = await res.json();
         mergeMigrationRuntime(sourceContentId, data);
         const needsLogin = (data.platforms || []).filter(item => item && item.stage === 'needs_login');
         let autoPreparedLogin = false;
@@ -5099,6 +5152,11 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
     document.addEventListener('click', event => {{
       const button = event.target.closest('button[data-command]');
       if (button) showCommand(button.dataset.command);
+      const clickedAction = event.target.closest('button[data-action]');
+      if (clickedAction && !clickedAction.disabled) {{
+        const label = clickedAction.textContent.trim() || clickedAction.dataset.action || '动作';
+        showCommand(`${{label}} 已点击，正在处理...`);
+      }}
       const lightboxImageTarget = event.target.closest('img[data-lightbox-images]');
       if (lightboxImageTarget) {{
         try {{

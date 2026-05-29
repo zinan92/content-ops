@@ -53,6 +53,7 @@ PUBLISH_PYTHON = PUBLISH_ROOT / ".venv/bin/python"
 FFMPEG = shutil.which("ffmpeg") or str(ROOT / "bin/ffmpeg")
 FFPROBE = shutil.which("ffprobe") or str(ROOT / "bin/ffprobe")
 TMUX = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
+NODE = shutil.which("node") or "/opt/homebrew/bin/node"
 BILIBILI_ACCOUNT = PUBLISH_ROOT / "cookies/bilibili_creator.json"
 XHS_SAU_ACCOUNT = PUBLISH_ROOT / "cookies/xiaohongshu_creator.json"
 WECHAT_CHANNELS_ACCOUNT = PUBLISH_ROOT / "cookies/tencent_uploader/account.json"
@@ -184,10 +185,89 @@ def compact_for_log(value: Any) -> Any:
 
 
 def write_log(entry: dict[str, Any]) -> None:
-    ACTION_DIR.mkdir(parents=True, exist_ok=True)
-    entry = compact_for_log({"created_at": now_iso(), **entry})
-    with ACTION_LOG.open("a", encoding="utf-8") as file_obj:
-        file_obj.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    try:
+        ACTION_DIR.mkdir(parents=True, exist_ok=True)
+        entry = compact_for_log({"created_at": now_iso(), **entry})
+        with ACTION_LOG.open("a", encoding="utf-8") as file_obj:
+            file_obj.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[{now_iso()}] action log write failed: {exc}\n")
+
+
+def tool_check(name: str, path: str | Path, required: bool = True) -> dict[str, Any]:
+    resolved = Path(path)
+    return {
+        "name": name,
+        "path": str(resolved),
+        "exists": resolved.exists(),
+        "required": required,
+    }
+
+
+def workbench_health() -> dict[str, Any]:
+    tools = {
+        "python": tool_check("python", sys.executable),
+        "content_ops_python": tool_check("content_ops_python", CONTENT_OPS_PYTHON, required=False),
+        "publish_python": tool_check("publish_python", PUBLISH_PYTHON, required=False),
+        "node": tool_check("node", NODE),
+        "tmux": tool_check("tmux", TMUX),
+        "ffmpeg": tool_check("ffmpeg", FFMPEG),
+        "ffprobe": tool_check("ffprobe", FFPROBE),
+        "build_dashboard": tool_check("build_dashboard", BUILD_DASHBOARD),
+        "wechat_channels_push": tool_check("wechat_channels_push", WECHAT_CHANNELS_PUSH, required=False),
+        "bilibili_upload": tool_check("bilibili_upload", BILIBILI_WEB_UPLOAD, required=False),
+        "youtube_channel": tool_check("youtube_channel", YOUTUBE_CHANNEL, required=False),
+    }
+    missing_required = [item for item in tools.values() if item["required"] and not item["exists"]]
+    return {
+        "ok": not missing_required,
+        "service": "park-io-outbox-workbench",
+        "outbox": str(OUTBOX),
+        "actions_log": str(ACTION_LOG),
+        "tools": tools,
+        "missing_required_tools": missing_required,
+        "platforms": CAPABILITIES,
+    }
+
+
+def api_failure(
+    route: str,
+    message: str,
+    status: str = "failed",
+    payload: dict[str, Any] | None = None,
+    exc: Exception | None = None,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "ok": False,
+        "action": route.removeprefix("/api/actions/"),
+        "status": status,
+        "stage": "failed",
+        "message": message,
+        "next_action": {
+            "label": "重试",
+            "endpoint": route,
+            "payload": payload or {},
+        },
+    }
+    if payload and payload.get("source_content_id"):
+        response["source_content_id"] = payload.get("source_content_id")
+    if exc:
+        response["error_type"] = exc.__class__.__name__
+    return response
+
+
+def normalize_api_response(route: str, payload: Any, request_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return api_failure(route, "接口没有返回结构化结果。", "empty_response", request_payload)
+    if not payload:
+        return api_failure(route, "接口返回为空。", "empty_response", request_payload)
+    payload.setdefault("ok", False)
+    payload.setdefault("action", route.removeprefix("/api/actions/") if route.startswith("/api/actions/") else route)
+    if "status" not in payload:
+        payload["status"] = "ok" if payload.get("ok") else "failed"
+    if not payload.get("message"):
+        payload["message"] = "动作已完成。" if payload.get("ok") else "动作未完成，详情请看状态。"
+    return payload
 
 
 def load_video_migration_state() -> dict[str, Any]:
@@ -355,10 +435,6 @@ def file_artifact(path: Path, label: str) -> dict[str, Any]:
 
 
 def auth_artifacts() -> dict[str, list[dict[str, Any]]]:
-    wechat_html_path = Path(str(record.get("wechat_html_path") or "")) if record.get("wechat_html_path") else None
-    if wechat_html_path and wechat_html_path.exists():
-        html_path = wechat_html_path
-        content_html = html_path.read_text(encoding="utf-8")
     return {
         "xiaohongshu": [file_artifact(XHS_SAU_ACCOUNT, "小红书账号 cookie")],
         "wechat_channels": [file_artifact(WECHAT_CHANNELS_ACCOUNT, "视频号账号 cookie")],
@@ -3319,7 +3395,23 @@ class WorkbenchHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         sys.stderr.write("[%s] %s\n" % (now_iso(), format % args))
 
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except Exception as exc:  # noqa: BLE001
+            route = urlparse(getattr(self, "path", "") or "").path
+            sys.stderr.write(f"[{now_iso()}] unhandled request error on {route}: {exc}\n")
+            if route.startswith("/api/"):
+                try:
+                    self.send_json(api_failure(route, f"本地 workbench 执行失败：{exc}", exc=exc), status=200)
+                except Exception as send_exc:  # noqa: BLE001
+                    sys.stderr.write(f"[{now_iso()}] failed to send API error response: {send_exc}\n")
+            else:
+                raise
+
     def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+        if not isinstance(payload, dict):
+            payload = api_failure(urlparse(getattr(self, "path", "") or "").path, "接口没有返回 JSON 对象。", "invalid_response")
         data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
@@ -3337,15 +3429,7 @@ class WorkbenchHandler(SimpleHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         route = parsed_url.path
         if route == "/api/health":
-            self.send_json(
-                {
-                    "ok": True,
-                    "service": "park-io-outbox-workbench",
-                    "outbox": str(OUTBOX),
-                    "actions_log": str(ACTION_LOG),
-                    "platforms": CAPABILITIES,
-                }
-            )
+            self.send_json(workbench_health())
             return
         if route == "/api/capabilities":
             self.send_json({"ok": True, "platforms": CAPABILITIES, "platform_urls": PLATFORM_URLS})
@@ -3397,176 +3481,181 @@ class WorkbenchHandler(SimpleHTTPRequestHandler):
             "/api/actions/mark-sent",
             "/api/actions/repair-missing-videos",
         }:
-            self.send_json({"ok": False, "message": "unknown endpoint"}, status=404)
+            self.send_json(api_failure(route, "未知 action endpoint。", "unknown_endpoint"), status=404)
             return
         try:
             payload = self.read_json_body()
         except json.JSONDecodeError:
-            self.send_json({"ok": False, "message": "请求体不是合法 JSON"}, status=400)
+            self.send_json(api_failure(route, "请求体不是合法 JSON。", "invalid_json"), status=400)
             return
-        if route == "/api/actions/check-channel":
-            result = check_channel(str(payload.get("platform") or ""))
-            write_log({"action": "check_channel", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/video-migration/status":
-            result = video_migration_status(payload)
-            write_log({"action": "video_migration_status", "request": payload, "result": result})
-        elif route == "/api/actions/video-migration/run":
-            result = run_video_migration(payload)
-        elif route == "/api/actions/handoff-platform":
-            if not bool(payload.get("confirmed")) and not bool(payload.get("dry_run")):
-                result = {
-                    "ok": False,
-                    "status": "confirmation_required",
-                    "platform": payload.get("platform") or "",
-                    "message": "这是会打开平台后台并写入系统剪贴板的动作，需要 confirmed=true。",
-                }
-            else:
+        try:
+            if route == "/api/actions/check-channel":
+                result = check_channel(str(payload.get("platform") or ""))
+                write_log({"action": "check_channel", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/video-migration/status":
+                result = video_migration_status(payload)
+                write_log({"action": "video_migration_status", "request": payload, "result": result})
+            elif route == "/api/actions/video-migration/run":
+                result = run_video_migration(payload)
+            elif route == "/api/actions/handoff-platform":
+                if not bool(payload.get("confirmed")) and not bool(payload.get("dry_run")):
+                    result = {
+                        "ok": False,
+                        "status": "confirmation_required",
+                        "platform": payload.get("platform") or "",
+                        "message": "这是会打开平台后台并写入系统剪贴板的动作，需要 confirmed=true。",
+                    }
+                else:
+                    try:
+                        result = handoff_platform(payload)
+                    except Exception as exc:  # noqa: BLE001
+                        result = {"ok": False, "status": "error", "platform": payload.get("platform") or "", "message": str(exc)}
+                write_log({"action": "handoff_platform", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/check-all-channels":
+                result = check_all_channels()
+                write_log({"action": "check_all_channels", "request": payload, "result": result})
+            elif route == "/api/actions/check-auth-artifacts":
+                result = check_auth_artifacts()
+                write_log({"action": "check_auth_artifacts", "request": payload, "result": result})
+            elif route == "/api/actions/wait-auth-artifacts":
+                result = wait_auth_artifacts(payload)
+                write_log({"action": "wait_auth_artifacts", "request": payload, "result": result})
+            elif route == "/api/actions/auth-qrcodes":
+                result = {"ok": True, "status": "checked", "auth_qrcodes": collect_auth_qrcodes(), "login_sessions": login_sessions_status()}
+                write_log({"action": "auth_qrcodes", "request": payload, "result": result})
+            elif route == "/api/actions/login-sessions":
+                result = {"ok": True, "status": "checked", "login_sessions": login_sessions_status(), "auth_qrcodes": collect_auth_qrcodes()}
+                write_log({"action": "login_sessions", "request": payload, "result": result})
+            elif route == "/api/actions/import-chrome-auth":
+                result = import_chrome_auth(payload)
+                write_log({"action": "import_chrome_auth", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/install-youtube-oauth-client":
+                result = install_youtube_oauth_client(payload)
+                write_log({"action": "install_youtube_oauth_client", "request": payload, "result": result})
+            elif route == "/api/actions/validate-channel-routes":
+                result = validate_channel_routes(payload)
+                write_log({"action": "validate_channel_routes", "request": payload, "result": result})
+            elif route == "/api/actions/prepare-channel":
                 try:
-                    result = handoff_platform(payload)
+                    result = prepare_channel(str(payload.get("platform") or ""))
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "prepare_channel_error",
+                        "platform": payload.get("platform") or "",
+                        "message": str(exc),
+                    }
+                write_log({"action": "prepare_channel", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/prepare-next-auth":
+                result = prepare_next_auth_channel(payload)
+                write_log({"action": "prepare_next_auth", "request": payload, "result": result})
+            elif route == "/api/actions/prepare-missing-channels":
+                result = prepare_missing_channels(payload)
+                write_log({"action": "prepare_missing_channels", "request": payload, "result": result})
+            elif route == "/api/actions/refresh-auth-prompts":
+                result = restart_auth_prompts(payload)
+                write_log({"action": "refresh_auth_prompts", "request": payload, "result": result})
+            elif route == "/api/actions/preflight-source":
+                try:
+                    result = preflight_source(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {"ok": False, "status": "error", "source_content_id": payload.get("source_content_id") or "", "message": str(exc)}
+                write_log({"action": "preflight_source", "request": payload, "result": result})
+            elif route == "/api/actions/prepare-local-asset":
+                try:
+                    result = prepare_local_asset(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "error",
+                        "platform": payload.get("platform") or "",
+                        "source_content_id": payload.get("source_content_id") or "",
+                        "message": str(exc),
+                    }
+                write_log({"action": "prepare_local_asset", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/generate-local-draft":
+                try:
+                    result = generate_local_draft(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "error",
+                        "platform": payload.get("platform") or "",
+                        "source_content_id": payload.get("source_content_id") or "",
+                        "message": str(exc),
+                    }
+                write_log({"action": "generate_local_draft", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/generate-content-package":
+                try:
+                    result = generate_content_package_action(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "error",
+                        "source_content_id": payload.get("source_content_id") or "",
+                        "message": str(exc),
+                    }
+                write_log({"action": "generate_content_package", "request": payload, "result": result})
+            elif route == "/api/actions/approve-content-package":
+                try:
+                    result = approve_content_package_action(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "error",
+                        "source_content_id": payload.get("source_content_id") or "",
+                        "message": str(exc),
+                    }
+                write_log({"action": "approve_content_package", "request": payload, "result": result})
+            elif route == "/api/actions/repair-local-gaps":
+                try:
+                    result = repair_local_gaps(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "error",
+                        "source_content_id": payload.get("source_content_id") or "",
+                        "message": str(exc),
+                    }
+                write_log({"action": "repair_local_gaps", "request": payload, "result": result})
+            elif route == "/api/actions/repair-all-local-gaps":
+                try:
+                    result = repair_all_local_gaps(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {
+                        "ok": False,
+                        "status": "error",
+                        "message": str(exc),
+                    }
+                write_log({"action": "repair_all_local_gaps", "request": payload, "result": result})
+            elif route == "/api/actions/run-action-queue":
+                try:
+                    result = run_action_queue(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {"ok": False, "status": "error", "message": str(exc)}
+                write_log({"action": "run_action_queue", "request": payload, "result": result})
+            elif route == "/api/actions/record-action-decision":
+                try:
+                    result = record_action_decision(payload)
+                except Exception as exc:  # noqa: BLE001
+                    result = {"ok": False, "status": "error", "message": str(exc)}
+                write_log({"action": "record_action_decision", "request": payload, "result": result})
+            elif route == "/api/actions/mark-sent":
+                try:
+                    result = mark_sent(payload)
                 except Exception as exc:  # noqa: BLE001
                     result = {"ok": False, "status": "error", "platform": payload.get("platform") or "", "message": str(exc)}
-            write_log({"action": "handoff_platform", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/check-all-channels":
-            result = check_all_channels()
-            write_log({"action": "check_all_channels", "request": payload, "result": result})
-        elif route == "/api/actions/check-auth-artifacts":
-            result = check_auth_artifacts()
-            write_log({"action": "check_auth_artifacts", "request": payload, "result": result})
-        elif route == "/api/actions/wait-auth-artifacts":
-            result = wait_auth_artifacts(payload)
-            write_log({"action": "wait_auth_artifacts", "request": payload, "result": result})
-        elif route == "/api/actions/auth-qrcodes":
-            result = {"ok": True, "status": "checked", "auth_qrcodes": collect_auth_qrcodes(), "login_sessions": login_sessions_status()}
-            write_log({"action": "auth_qrcodes", "request": payload, "result": result})
-        elif route == "/api/actions/login-sessions":
-            result = {"ok": True, "status": "checked", "login_sessions": login_sessions_status(), "auth_qrcodes": collect_auth_qrcodes()}
-            write_log({"action": "login_sessions", "request": payload, "result": result})
-        elif route == "/api/actions/import-chrome-auth":
-            result = import_chrome_auth(payload)
-            write_log({"action": "import_chrome_auth", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/install-youtube-oauth-client":
-            result = install_youtube_oauth_client(payload)
-            write_log({"action": "install_youtube_oauth_client", "request": payload, "result": result})
-        elif route == "/api/actions/validate-channel-routes":
-            result = validate_channel_routes(payload)
-            write_log({"action": "validate_channel_routes", "request": payload, "result": result})
-        elif route == "/api/actions/prepare-channel":
-            try:
-                result = prepare_channel(str(payload.get("platform") or ""))
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "prepare_channel_error",
-                    "platform": payload.get("platform") or "",
-                    "message": str(exc),
-                }
-            write_log({"action": "prepare_channel", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/prepare-next-auth":
-            result = prepare_next_auth_channel(payload)
-            write_log({"action": "prepare_next_auth", "request": payload, "result": result})
-        elif route == "/api/actions/prepare-missing-channels":
-            result = prepare_missing_channels(payload)
-            write_log({"action": "prepare_missing_channels", "request": payload, "result": result})
-        elif route == "/api/actions/refresh-auth-prompts":
-            result = restart_auth_prompts(payload)
-            write_log({"action": "refresh_auth_prompts", "request": payload, "result": result})
-        elif route == "/api/actions/preflight-source":
-            try:
-                result = preflight_source(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {"ok": False, "status": "error", "source_content_id": payload.get("source_content_id") or "", "message": str(exc)}
-            write_log({"action": "preflight_source", "request": payload, "result": result})
-        elif route == "/api/actions/prepare-local-asset":
-            try:
-                result = prepare_local_asset(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "error",
-                    "platform": payload.get("platform") or "",
-                    "source_content_id": payload.get("source_content_id") or "",
-                    "message": str(exc),
-                }
-            write_log({"action": "prepare_local_asset", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/generate-local-draft":
-            try:
-                result = generate_local_draft(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "error",
-                    "platform": payload.get("platform") or "",
-                    "source_content_id": payload.get("source_content_id") or "",
-                    "message": str(exc),
-                }
-            write_log({"action": "generate_local_draft", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/generate-content-package":
-            try:
-                result = generate_content_package_action(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "error",
-                    "source_content_id": payload.get("source_content_id") or "",
-                    "message": str(exc),
-                }
-            write_log({"action": "generate_content_package", "request": payload, "result": result})
-        elif route == "/api/actions/approve-content-package":
-            try:
-                result = approve_content_package_action(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "error",
-                    "source_content_id": payload.get("source_content_id") or "",
-                    "message": str(exc),
-                }
-            write_log({"action": "approve_content_package", "request": payload, "result": result})
-        elif route == "/api/actions/repair-local-gaps":
-            try:
-                result = repair_local_gaps(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "error",
-                    "source_content_id": payload.get("source_content_id") or "",
-                    "message": str(exc),
-                }
-            write_log({"action": "repair_local_gaps", "request": payload, "result": result})
-        elif route == "/api/actions/repair-all-local-gaps":
-            try:
-                result = repair_all_local_gaps(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "ok": False,
-                    "status": "error",
-                    "message": str(exc),
-                }
-            write_log({"action": "repair_all_local_gaps", "request": payload, "result": result})
-        elif route == "/api/actions/run-action-queue":
-            try:
-                result = run_action_queue(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {"ok": False, "status": "error", "message": str(exc)}
-            write_log({"action": "run_action_queue", "request": payload, "result": result})
-        elif route == "/api/actions/record-action-decision":
-            try:
-                result = record_action_decision(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {"ok": False, "status": "error", "message": str(exc)}
-            write_log({"action": "record_action_decision", "request": payload, "result": result})
-        elif route == "/api/actions/mark-sent":
-            try:
-                result = mark_sent(payload)
-            except Exception as exc:  # noqa: BLE001
-                result = {"ok": False, "status": "error", "platform": payload.get("platform") or "", "message": str(exc)}
-            write_log({"action": "mark_sent", "platform": payload.get("platform") or "", "request": payload, "result": result})
-        elif route == "/api/actions/repair-missing-videos":
-            result = repair_missing_videos(payload)
-            write_log({"action": "repair_missing_videos", "request": payload, "result": result})
-        else:
-            result = handle_push_draft(payload)
-        self.send_json(result, status=200 if result.get("ok") or result.get("status") != "error" else 400)
+                write_log({"action": "mark_sent", "platform": payload.get("platform") or "", "request": payload, "result": result})
+            elif route == "/api/actions/repair-missing-videos":
+                result = repair_missing_videos(payload)
+                write_log({"action": "repair_missing_videos", "request": payload, "result": result})
+            else:
+                result = handle_push_draft(payload)
+        except Exception as exc:  # noqa: BLE001
+            result = api_failure(route, f"本地 action 执行失败：{exc}", payload=payload, exc=exc)
+            write_log({"action": route.removeprefix("/api/actions/"), "request": payload, "result": result})
+        result = normalize_api_response(route, result, payload)
+        self.send_json(result, status=200)
 
 
 def main() -> None:
