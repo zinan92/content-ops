@@ -4505,6 +4505,17 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         showCommand(serverLaunchCommand);
         return;
       }}
+      const currentMigration = migrationRuntime[sourceContentId] || {{}};
+      if (['publishing', 'running', 'waiting_auth', 'already_running'].includes(currentMigration.status)) {{
+        showCommand(formatActionResult({{
+          ok: false,
+          status: 'already_running',
+          source_content_id: sourceContentId,
+          platforms: currentMigration.platforms || [],
+          message: '这条视频搬运正在执行；为避免重复上传，本次点击已被拦截。'
+        }}));
+        return;
+      }}
       if (!options.skipConfirm && !confirm('确认搬运到 视频号草稿 / Bilibili仅自己可见 / YouTube private？\\n\\n这不会对外上线。若有平台未登录，本次不会开始上传，页面会显示需要先登录的平台。')) return;
       const running = {{
         ok: false,

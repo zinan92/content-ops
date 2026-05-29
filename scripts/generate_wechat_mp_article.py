@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import html
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,21 @@ def topic_field(topic: dict[str, Any], key: str) -> str:
     return ""
 
 
+def slugify_text(value: str, max_len: int = 36) -> str:
+    value = clean_hashtags(value)
+    value = re.sub(r"[^\w\u4e00-\u9fff]+", "-", value, flags=re.UNICODE).strip("-").lower()
+    return (value[:max_len].strip("-") or "wechat-mp")
+
+
+def normalize_topic_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def topic_examples(topic: dict[str, Any], limit: int = 3) -> list[str]:
+    examples = topic.get("supporting_examples") or topic.get("examples") or []
+    return [normalize_topic_text(item) for item in examples if normalize_topic_text(item)][:limit]
+
+
 def section_markdown(title: str, body: list[str]) -> str:
     return "\n".join([f"## {title}", "", *body, ""]).strip()
 
@@ -187,6 +203,8 @@ def markdown_body_to_wechat_html(markdown: str, style_id: str = "professional") 
 
 def visual_html(kind: str, article: dict[str, Any]) -> str:
     if kind == "cover":
+        cover_title = html.escape(article.get("title") or "公众号文章")
+        cover_digest = html.escape(article.get("digest") or "")
         return f"""<!doctype html><html><head><meta charset="utf-8"><style>
         body {{ margin:0; width:900px; height:383px; background:#f8f7ef; font-family:"PingFang SC","Songti SC",serif; color:#17231d; }}
         .wrap {{ box-sizing:border-box; width:900px; height:383px; padding:42px 54px; position:relative; overflow:hidden; }}
@@ -195,9 +213,12 @@ def visual_html(kind: str, article: dict[str, Any]) -> str:
         h1 {{ margin:0; font-size:58px; line-height:1.05; letter-spacing:0; max-width:710px; }}
         .sub {{ margin-top:18px; font-size:24px; color:#4d5b53; }}
         .mark {{ position:absolute; right:50px; top:42px; width:118px; height:118px; border:1px solid #b9cbc1; border-radius:50%; display:grid; place-items:center; color:#16845b; font-size:18px; font-weight:800; }}
-        </style></head><body><div class="wrap"><div class="tag">Park 的 AI 世界</div><h1>100件事里<br>99件不赚钱</h1><div class="sub">AI时代，先别急着找机会</div><div class="mark">判断<br>先于<br>行动</div><div class="rule"></div></div></body></html>"""
+        </style></head><body><div class="wrap"><div class="tag">Park 的 AI 世界</div><h1>{cover_title}</h1><div class="sub">{cover_digest[:46]}</div><div class="mark">判断<br>先于<br>行动</div><div class="rule"></div></div></body></html>"""
     if kind == "spine":
-        return """<!doctype html><html><head><meta charset="utf-8"><style>
+        topic_titles = [html.escape(str(topic.get("title") or "")) for topic in (article.get("topics") or [])[:3]]
+        while len(topic_titles) < 3:
+            topic_titles.append("核心判断")
+        template = """<!doctype html><html><head><meta charset="utf-8"><style>
         body { margin:0; width:920px; height:520px; background:#f7f5ee; font-family:"PingFang SC","Songti SC",serif; color:#17231d; }
         .wrap { padding:44px; box-sizing:border-box; }
         h2 { margin:0 0 36px; font-size:34px; line-height:1.2; }
@@ -207,7 +228,8 @@ def visual_html(kind: str, article: dict[str, Any]) -> str:
         h3 { margin:28px 0 16px; font-size:28px; }
         p { margin:0; font-size:20px; line-height:1.65; color:#46544d; }
         .foot { margin-top:34px; padding:18px 22px; background:#e8f3ee; border-left:5px solid #16845b; font-size:22px; line-height:1.55; }
-        </style></head><body><div class="wrap"><h2>文章主线</h2><div class="grid"><div class="card"><div class="num">01</div><h3>先定义赌注</h3><p>知道自己在赌什么</p></div><div class="card"><div class="num">02</div><h3>再找不变变量</h3><p>避开无效机会</p></div><div class="card"><div class="num">03</div><h3>最后加速迭代</h3><p>把 AI 放进系统</p></div></div><div class="foot">先定义赌注，再识别不变变量，最后用 AI 加速迭代。</div></div></body></html>"""
+        </style></head><body><div class="wrap"><h2>文章主线</h2><div class="grid"><div class="card"><div class="num">01</div><h3>__TOPIC_0__</h3><p>先抓住这条内容的主判断。</p></div><div class="card"><div class="num">02</div><h3>__TOPIC_1__</h3><p>再看它反对了什么常见误解。</p></div><div class="card"><div class="num">03</div><h3>__TOPIC_2__</h3><p>最后落到下一步行动。</p></div></div><div class="foot">先还原视频主线，再整理成一篇可审核的公众号长文。</div></div></body></html>"""
+        return template.replace("__TOPIC_0__", topic_titles[0]).replace("__TOPIC_1__", topic_titles[1]).replace("__TOPIC_2__", topic_titles[2])
     if kind == "decision":
         return """<!doctype html><html><head><meta charset="utf-8"><style>
         body { margin:0; width:920px; height:520px; background:#fbfaf4; font-family:"PingFang SC","Songti SC",serif; color:#17231d; }
@@ -287,147 +309,68 @@ async def render_visuals(media_dir: Path, article: dict[str, Any]) -> dict[str, 
 
 
 def build_article(package: dict[str, Any]) -> dict[str, Any]:
-    original_title = str(package.get("title") or "")
-    title = "100件事里99件不赚钱：AI时代，先别急着找机会"
-    digest = "AI时代最重要的不是做更多事，而是先判断哪些事不值得做：定义赌注、守住止损、重塑底层框架，再用AI加速迭代。"
+    original_title = clean_hashtags(str(package.get("title") or ""))
+    title = original_title or "公众号文章草稿"
     topics = pick_topics(package)
-    topic_lookup = {str(topic.get("title") or ""): topic for topic in topics}
-
-    intro = [
-        "如果把这条视频压缩成一句话，我会说：AI时代不是机会突然变少了，而是“看起来能做的事”变多了，但真正能赚钱、能积累、能长期复利的事反而更少了。",
-        "过去很多事情，只要赶上流量、赶上平台、赶上某个行业红利，就有机会做成。但现在不一样。工具平权以后，真正拉开差距的不是谁会用一个新工具，而是谁能更早判断：这件事到底值不值得做。",
-        "所以这篇文章不讲某个具体工具，也不讲一个简单的赚钱方法。它讲的是在 AI 时代做判断的一套底层顺序：先定义赌注，再识别不变的东西，然后用 AI 加速自己的迭代。",
-    ]
+    if topics:
+        first_claim = topic_field(topics[0], "claim")
+        digest = first_claim or f"基于《{title}》整理出的公众号长文草稿。"
+    else:
+        digest = f"基于《{title}》整理出的公众号长文草稿。"
 
     sections: list[str] = []
-    sections.append(section_markdown("一、先问清楚：我到底在赌什么？", intro))
+    intro = [
+        f"这篇文章来自一条抖音视频《{title}》。我没有把它逐字转成口播稿，而是先把原视频里的主线、判断和例子整理出来，再改成一篇可以在公众号里阅读的长文。",
+        normalize_topic_text(package.get("readable_transcript", "")).split("\n\n", 1)[0].replace("## ", "")[:420]
+        or "这条内容的核心不是给一个简单答案，而是把一个正在发生的变化拆开看：哪些判断正在失效，哪些变量正在变大，普通人应该如何行动。",
+    ]
+    sections.append(section_markdown("一、这条视频到底在说什么", intro))
 
-    trading = topic_lookup.get("交易和创业前先回答“我到底在赌什么”") or (topics[0] if topics else {})
-    sections.append(
-        section_markdown(
-            "二、交易和创业的第一步，不是找机会，而是定义退出条件",
-            [
-                topic_field(trading, "claim")
-                or "不管交易、创业还是投钱下场，真正重要的是先定义赌注、止损和退出条件，而不是只看机会本身。",
-                "很多人以为交易靠的是判断方向，但只要你真的有了仓位，就会发现另一件事：人会自动寻找支持自己仓位的信息。仓位一旦存在，屁股就会开始决定脑袋。",
-                "所以理智必须前置。你不能等市场已经打到脸上，才开始问自己“我是不是错了”。下单之前就要知道：我赌的变量是什么？什么情况说明这个变量失效？我在哪里离开？",
-                "止盈可以动态，因为趋势加速时，空间可能比一开始想象得更大。但亏损边界最好提前设定。它不是为了限制想象力，而是为了防止人在压力中自我欺骗。",
-            ],
-        )
-    )
-
-    frame = topic_lookup.get("应用层会变化，底层抽象和思维框架才是人的能量来源") or {}
-    sections.append(
-        section_markdown(
-            "三、不要被应用层热闹骗了，真正稀缺的是底层框架",
-            [
-                topic_field(frame, "claim")
-                or "AI工具、部署、自媒体应用都会变，但一个人真正长期有价值的是自己的底层抽象和可迭代的思维框架。",
-                "网上每天都有新的 AI 工具、新的部署教程、新的提示词、新的自媒体玩法。这些当然有用，但它们都是应用层。",
-                "应用层会不断变化。今天流行这个工具，明天换成另一个工具；今天某个平台有效，明天规则可能又变了。真正决定一个人能不能迁移能力的，是他有没有自己的底层抽象。",
-                "我会把思维框架想成一棵树。最底层是价值观和判断标准，中层是方法论，上层才是具体工具和动作。一个人如果只在上层换工具，就会很忙；如果能修改底层框架，就会真的变强。",
-            ],
-        )
-    )
-
-    assumption = topic_lookup.get("重塑底层价值观，是AI时代最稀缺的能力之一") or {}
-    sections.append(
-        section_markdown(
-            "四、AI冲击下，旧假设不一定继续成立",
-            [
-                topic_field(assumption, "claim")
-                or "AI冲击下，过去很多被当成真理的假设都可能失效，能不能质疑并重塑底层价值观决定个人上限。",
-                "很多长辈会说：我活了几十年，世界一直是这样运行的。但问题是，过去几十年的经验，可能只是一个历史周期里的经验。",
-                "美国霸权、全球化、互联网红利、平台流量、职业稳定性，这些东西都曾经看起来很稳。但当 AI 进入社会，它会重新分配生产力、注意力和资源。",
-                "这时最重要的能力不是否定一切，而是区分两件事：哪些假设只是时代产物，哪些东西真的接近不变。",
-            ],
-        )
-    )
-
-    certainty = topic_lookup.get("在快速变化中找不变：不确定性、黄金、视频和存储") or {}
-    sections.append(
-        section_markdown(
-            "五、变化越快，越要找“不用赌太多”的确定性",
-            [
-                topic_field(certainty, "claim")
-                or "未来的不确定性会增加，科技发展会加速，视频内容会爆发，存储需求会成为更接近确定性的长期变量。",
-                "很多时候，真正好的判断不是找到一个别人完全不知道的秘密，而是在一堆变化里找到最稳定的变量。",
-                "比如不确定性增加时，黄金为什么有价值？不是因为它每天都涨，而是因为它代表一种长期存在的避险需求。",
-                "再比如 AI 时代，视频会越来越多，视频质量会越来越高，生成内容会越来越便宜。那么随之而来的存储需求，就比押注某一家具体公司更接近底层变量。",
-                "这就是我说的：不要总是在最拥挤、最细节的地方下注。先找出房间里的大象，再判断哪些细节值得看。",
-            ],
-        )
-    )
-
-    ai_workflow = topic_lookup.get("AI沟通的关键不是问对一句话，而是think out loud") or {}
-    sections.append(
-        section_markdown(
-            "六、和 AI 协作，不是一次问对，而是把思考倒出来",
-            [
-                topic_field(ai_workflow, "claim")
-                or "普通人不必一开始就问出完美问题，更有效的方式是把脑内想法完整倒出来，让AI追问、整理、收敛成single source of truth。",
-                "很多人用 AI 的压力来自于：我是不是要先写出一个完美 prompt？我觉得不需要。",
-                "真正有效的方式是 think out loud。你先把脑子里的东西倒出来，哪怕它们混乱、重复、不成体系，也没关系。让 AI 帮你追问、归类、提炼，最后收敛成一个 single source of truth。",
-                "人擅长判断方向、设定边界、定义成功标准。AI 擅长快速整理、快速执行、快速迭代。把 AI 当合作伙伴，而不是当一个被动工具，这件事会改变你的工作方式。",
-            ],
-        )
-    )
-
-    iteration = topic_lookup.get("人的成长，本质是提高迭代速度") or {}
-    sections.append(
-        section_markdown(
-            "七、人的成长，本质是提高迭代速度",
-            [
-                topic_field(iteration, "claim")
-                or "人与人之间的差距，很多时候不是单次判断差距，而是复盘、记录、修正和重新行动的迭代速度差距。",
-                "康威生命游戏给我的启发是：简单规则在足够大的空间、足够长的时间和足够多的迭代里，会演化出非常复杂的结果。",
-                "人也是这样。你每天写日记、复盘决策、记录自己为什么判断、为什么行动、为什么失败，本质上是在提高自己的 iteration rate。",
-                "AI 的价值也在这里。它能让很多原来需要几天的整理和尝试，变成十几分钟一次的小步快跑。只要每次迭代方向大体正确，长期差距会非常大。",
-            ],
-        )
-    )
-
-    media = topic_lookup.get("一定要做自媒体：过程本身也可以成为产品") or {}
-    sections.append(
-        section_markdown(
-            "八、为什么普通人也要做自媒体",
-            [
-                topic_field(media, "claim")
-                or "普通人不一定一开始就能做出强产品，但可以把做产品、学工具、建立判断的过程公开出来，让过程本身成为内容和产品。",
-                "做一个真正有价值的产品很难。但把自己做产品、学 AI、建立判断系统的过程记录下来，这件事本身就可以成为内容。",
-                "你做不出来一个很厉害的 app 没关系，你把怎么做、怎么失败、怎么调整、怎么复盘讲清楚，这个过程就有价值。",
-                "在未来，个人既是生产者，也是媒介，也是产品。你能不能持续输出判断，能不能让别人相信你的框架，会变得越来越重要。",
-            ],
-        )
-    )
+    number_labels = ["二", "三", "四", "五", "六", "七", "八", "九"]
+    for index, topic in enumerate(topics[:8]):
+        topic_title = normalize_topic_text(topic.get("title")) or f"主题 {index + 1}"
+        body: list[str] = []
+        claim = topic_field(topic, "claim")
+        contrast = topic.get("cognitive_contrast") or topic_field(topic, "contrast")
+        boundary = topic_field(topic, "boundary")
+        if claim:
+            body.append(claim)
+        if contrast:
+            body.append(str(contrast))
+        examples = topic_examples(topic)
+        if examples:
+            body.append("这不是一个抽象判断，视频里给了几个很具体的线索：")
+            body.extend([f"- {item}" for item in examples])
+        span = normalize_topic_text(topic.get("source_span_summary"))
+        if span:
+            body.append(span)
+        if boundary:
+            body.append(f"这里也有边界：{boundary}")
+        if not body:
+            body.append("这个主题来自内容包的主题判断，目前还需要人工补充更多论证。")
+        sections.append(section_markdown(f"{number_labels[index]}、{topic_title}", body))
 
     conclusion = [
-        "所以，AI时代不是让人去追更多工具，而是逼每个人重新问：我到底靠什么做判断？我如何定义边界？我能不能持续迭代？",
-        "100件事里99件不赚钱，听起来很悲观。但反过来看，它也意味着：如果你能更早排除那99件事，把精力放到真正有复利的方向上，你的胜率反而会变高。",
-        "不要急着做更多事。先问清楚你在赌什么，哪些假设已经变了，哪些东西仍然不变。然后，把 AI 放进你的系统里，让它帮你更快复盘、更快执行、更快迭代。",
-        "这可能才是普通人在 AI 时代最现实的生存方式。",
+        "如果只看表面，这条内容像是在讨论 AI、工具、闭环和探索。但更底层的问题其实是：当一个巨大的变量正在快速长大时，普通人要不要主动去摸它的边界。",
+        "我的判断是，不确定性不是停止探索的理由。恰恰相反，越是在边界还没有被完全看清的时候，越需要用自己的实践去建立判断。",
+        "等所有人都看清楚答案的时候，答案本身就不再是机会。真正的差距，往往来自别人还在观望时，你已经开始记录、试错、复盘和迭代。",
     ]
-    sections.append(section_markdown("结尾：少做无效动作，把 AI 放进自己的迭代系统", conclusion))
+    sections.append(section_markdown("结尾：不要等答案公布以后才行动", conclusion))
 
-    markdown = "\n\n".join(
-        [
-            f"# {title}",
-            "",
-            f"> {digest}",
-            "",
-            *sections,
-        ]
-    ).strip() + "\n"
+    markdown = "\n\n".join([f"# {title}", "", f"> {digest}", "", *sections]).strip() + "\n"
     return {
         "title": title,
         "digest": digest,
-        "source_title": clean_hashtags(original_title),
+        "source_title": original_title,
+        "topics": topics,
         "markdown": markdown,
     }
 
 
 def style_article(base: dict[str, Any], style_id: str) -> dict[str, Any]:
     if style_id == "professional":
+        return base
+    if "100件事" not in str(base.get("title") or ""):
         return base
     title = base["title"]
     source_title = base["source_title"]
@@ -852,7 +795,8 @@ def main() -> None:
     article = build_article(package)
 
     DRAFT_DIR.mkdir(parents=True, exist_ok=True)
-    slug = "2026-05-25--ai-100-99--wechat_mp-7613803738997722394-01"
+    date_part = source_dir.name.split("--", 1)[0] if "--" in source_dir.name else datetime.now().date().isoformat()
+    slug = f"{date_part}--{slugify_text(article['title'])}--wechat_mp-{args.source_content_id}-01"
     json_path = Path(args.output_json) if args.output_json else DRAFT_DIR / f"{slug}.json"
     md_path = json_path.with_suffix(".md")
     html_path = json_path.with_suffix(".html")
@@ -889,8 +833,8 @@ def main() -> None:
     record = {
         "platform": "wechat_mp",
         "status": "draft_ready",
-        "intended_publish_at": "2026-05-25",
-        "local_id": "wechat_mp-7613803738997722394-01",
+        "intended_publish_at": date_part,
+        "local_id": f"wechat_mp-{args.source_content_id}-01",
         "source_platform": "douyin",
         "source_content_id": args.source_content_id,
         "source_url": f"https://www.douyin.com/video/{args.source_content_id}",

@@ -152,6 +152,8 @@ CHANNELS = ["xiaohongshu", "wechat_mp", "wechat_channels", "bilibili", "youtube"
 PREPARABLE_CHANNELS = {"xiaohongshu", "wechat_mp", "wechat_channels", "bilibili", "youtube"}
 VIDEO_MIGRATION_CHANNELS = {"wechat_channels", "bilibili", "youtube"}
 VIDEO_MIGRATION_ORDER = ["wechat_channels", "bilibili", "youtube"]
+VIDEO_MIGRATION_DONE_STAGES = {"done", "published", "submitted_review", "self_only_uploaded", "private_uploaded", "draft_saved_in_platform"}
+VIDEO_MIGRATION_ACTIVE_STAGES = {"running", "publishing", "waiting_auth"}
 AUTH_PREP_ORDER = ["xiaohongshu", "wechat_channels", "bilibili", "youtube"]
 MANUAL_AUTH_BLOCKERS = {"extension_host_permission_missing"}
 XHS_BRIDGE_SESSION = "park-xhs-bridge"
@@ -337,6 +339,29 @@ def update_source_step_state(source_content_id: str, step: str, result: dict[str
     save_source_state(source_content_id, state)
 
 
+def current_source_step_state(source_content_id: str, step: str) -> dict[str, Any]:
+    state = load_source_state(source_content_id)
+    steps = state.get("steps") if isinstance(state.get("steps"), dict) else {}
+    item = steps.get(step) if isinstance(steps, dict) else {}
+    return item if isinstance(item, dict) else {}
+
+
+def source_step_stage(source_content_id: str, step: str) -> str:
+    item = current_source_step_state(source_content_id, step)
+    return str(item.get("stage") or item.get("status") or "")
+
+
+def is_recent_step_state(step_state: dict[str, Any], max_age_seconds: int = 7200) -> bool:
+    raw = str(step_state.get("updated_at") or "")
+    if not raw:
+        return False
+    try:
+        timestamp = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    return (datetime.now() - timestamp).total_seconds() <= max_age_seconds
+
+
 def persisted_video_migration_platform(source_content_id: str, platform: str) -> dict[str, Any]:
     item = (load_video_migration_state().get(source_content_id) or {}).get(platform)
     return item if isinstance(item, dict) else {}
@@ -366,15 +391,30 @@ def update_video_migration_state(source_content_id: str, platform: str, result: 
         "result": result,
     }
     save_video_migration_state(state)
+    platform_states = [source_state.get(item) for item in VIDEO_MIGRATION_ORDER]
+    completed = [
+        item
+        for item in platform_states
+        if isinstance(item, dict) and item.get("ok") and str(item.get("stage") or "") in VIDEO_MIGRATION_DONE_STAGES
+    ]
+    evidence_items: list[dict[str, Any]] = []
+    for item in platform_states:
+        if not isinstance(item, dict):
+            continue
+        for evidence_item in item.get("evidence") or []:
+            if isinstance(evidence_item, dict) and evidence_item not in evidence_items:
+                evidence_items.append(evidence_item)
+    aggregate_ok = len(completed) == len(VIDEO_MIGRATION_ORDER)
     update_source_step_state(
         source_content_id,
         "video_migration",
         {
-            "ok": True,
-            "status": "done",
-            "stage": "done",
-            "message": "视频搬运状态已更新。",
-            "evidence": source_state[platform].get("evidence") or [],
+            "ok": aggregate_ok,
+            "status": "done" if aggregate_ok else "partial_done",
+            "stage": "done" if aggregate_ok else "partial_done",
+            "message": "三个平台已完成草稿/私密/待审核搬运。" if aggregate_ok else "已有平台完成搬运，剩余平台继续等待处理。",
+            "platforms": [item for item in platform_states if isinstance(item, dict)],
+            "evidence": evidence_items,
         },
     )
 
@@ -2314,11 +2354,24 @@ def video_migration_status(payload: dict[str, Any]) -> dict[str, Any]:
     asset = find_source_asset(source_content_id)
     if not asset:
         return {"ok": False, "status": "source_missing", "source_content_id": source_content_id, "message": f"没有找到源内容：{source_content_id}"}
+    existing_step = current_source_step_state(source_content_id, "video_migration")
+    existing_stage = str(existing_step.get("stage") or existing_step.get("status") or "")
+    if existing_stage in VIDEO_MIGRATION_ACTIVE_STAGES and is_recent_step_state(existing_step):
+        return {
+            "ok": bool(existing_step.get("ok")),
+            "status": existing_stage,
+            "stage": existing_stage,
+            "source_content_id": source_content_id,
+            "title": asset.get("title") or "",
+            "publish_mode": "draft_private",
+            "platforms": existing_step.get("platforms") or [],
+            "message": existing_step.get("message") or "视频搬运正在执行，请等待当前动作完成。",
+            "state": load_source_state(source_content_id),
+        }
     platforms = [video_migration_platform_status(platform, source_content_id) for platform in VIDEO_MIGRATION_ORDER]
     blocked = [item for item in platforms if item.get("stage") == "blocked"]
     needs_login = [item for item in platforms if item.get("stage") == "needs_login"]
-    done_stages = {"done", "submitted_review", "self_only_uploaded", "private_uploaded", "draft_saved_in_platform"}
-    done = [item for item in platforms if item.get("ok") and item.get("stage") in done_stages]
+    done = [item for item in platforms if item.get("ok") and item.get("stage") in VIDEO_MIGRATION_DONE_STAGES]
     status_value = "done" if len(done) == len(VIDEO_MIGRATION_ORDER) else "ready" if not blocked and not needs_login else "blocked" if blocked else "needs_login"
     status_message = {
         "done": "三个平台已完成草稿/私密/待审核搬运。",
@@ -2336,7 +2389,8 @@ def video_migration_status(payload: dict[str, Any]) -> dict[str, Any]:
         "message": status_message,
         "state": load_source_state(source_content_id),
     }
-    update_source_step_state(source_content_id, "video_migration", {**result, "stage": result["status"]})
+    if status_value == "done" or existing_stage not in {"done", "partial_done", "partial_failed"}:
+        update_source_step_state(source_content_id, "video_migration", {**result, "stage": result["status"]})
     result["state"] = load_source_state(source_content_id)
     return result
 
@@ -2381,6 +2435,19 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
             "source_content_id": source_content_id,
             "message": "这是搬运到 视频号草稿 / Bilibili仅自己可见 / YouTube private 的动作，需要 confirmed=true。",
         }
+    existing_step = current_source_step_state(source_content_id, "video_migration")
+    existing_stage = str(existing_step.get("stage") or existing_step.get("status") or "")
+    if existing_stage in VIDEO_MIGRATION_ACTIVE_STAGES and is_recent_step_state(existing_step):
+        return {
+            "ok": False,
+            "status": "already_running",
+            "stage": existing_stage,
+            "source_content_id": source_content_id,
+            "publish_mode": "draft_private",
+            "platforms": existing_step.get("platforms") or [],
+            "message": "这条视频搬运正在执行；为避免重复上传，本次点击已被拦截。",
+            "state": load_source_state(source_content_id),
+        }
     status = video_migration_status({"source_content_id": source_content_id})
     results: list[dict[str, Any]] = []
     status_platforms = status.get("platforms") or []
@@ -2424,9 +2491,30 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
         return result
 
     waiting_auth = False
+    update_source_step_state(
+        source_content_id,
+        "video_migration",
+        {
+            "ok": False,
+            "status": "publishing",
+            "stage": "publishing",
+            "source_content_id": source_content_id,
+            "publish_mode": "draft_private",
+            "platforms": [
+                {
+                    **platform_state,
+                    "stage": "publishing" if platform_state.get("stage") == "connected" else platform_state.get("stage"),
+                    "status": "publishing" if platform_state.get("stage") == "connected" else platform_state.get("status"),
+                    "message": "正在搬运到草稿/私密/待审核；请勿重复点击。" if platform_state.get("stage") == "connected" else platform_state.get("message"),
+                }
+                for platform_state in status_platforms
+            ],
+            "message": "视频搬运正在执行；为避免重复上传，请等待当前动作完成。",
+        },
+    )
     for platform_state in status_platforms:
         platform = str(platform_state.get("platform") or "")
-        if platform_state.get("ok") and platform_state.get("stage") in {"done", "submitted_review", "self_only_uploaded", "private_uploaded", "draft_saved_in_platform"}:
+        if platform_state.get("ok") and platform_state.get("stage") in VIDEO_MIGRATION_DONE_STAGES:
             results.append(
                 {
                     **platform_state,
