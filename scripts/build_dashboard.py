@@ -834,6 +834,16 @@ def draft_summary(draft: dict, platform_status_value: str, xhs_triage: dict[str,
             "cover_href": existing_href(value.get("cover_path"), base=variant_base),
             "image_hrefs": image_hrefs,
         }
+    is_current_wechat_workflow = bool(
+        (draft.get("platform") == "wechat_mp" or draft.get("record", {}).get("platform") == "wechat_mp")
+        and (
+            style_variants
+            or draft.get("record", {}).get("wechat_style")
+            or draft.get("record", {}).get("cover_path")
+            or draft.get("record", {}).get("wechat_html_path")
+        )
+        and (draft.get("body") or draft.get("record", {}).get("body"))
+    )
     return {
         "title": draft.get("title") or "",
         "topic_index": draft.get("topic_index"),
@@ -854,6 +864,7 @@ def draft_summary(draft: dict, platform_status_value: str, xhs_triage: dict[str,
             == "search-card-v4-atomic-topic"
             and draft.get("record", {}).get("xhs_argument_pack")
         ),
+        "is_current_wechat_workflow": is_current_wechat_workflow,
         "style_variants": style_variants,
         "json_href": draft.get("json_href") or "",
         "package_href": draft.get("package_href") or "",
@@ -1180,11 +1191,14 @@ def stage_status_for_source(source: dict) -> list[dict]:
     wechat = state("wechat_mp")
     wechat_drafts = wechat.get("drafts") or []
     wechat_has_preview = any(
-        draft.get("html_href")
-        or any(
-            variant.get("html_preview_href")
-            for variant in (draft.get("style_variants") or {}).values()
-            if isinstance(variant, dict)
+        draft.get("is_current_wechat_workflow")
+        and (
+            draft.get("html_href")
+            or any(
+                variant.get("html_preview_href")
+                for variant in (draft.get("style_variants") or {}).values()
+                if isinstance(variant, dict)
+            )
         )
         for draft in wechat_drafts
     )
@@ -3097,7 +3111,7 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         </article>
         <article class="auth-helper-card">
           <h3>Bilibili</h3>
-          <p>目标：上传为仅自己可见，不公开发布。</p>
+          <p>目标：上传为仅自己可见，不会对外上线。</p>
           <code>/Users/wendy/content-toolkit/capabilities/publish/cookies/bilibili_creator.json</code>
           <ol>
             <li>点“Bilibili / 准备通道”。</li>
@@ -3107,7 +3121,7 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         </article>
         <article class="auth-helper-card">
           <h3>YouTube</h3>
-          <p>目标：上传为 private，不公开发布。</p>
+          <p>目标：上传为 private，不会对外上线。</p>
           <code>/Users/wendy/.config/park/youtube-oauth.json</code>
           <code>/Users/wendy/.config/park/youtube-token.json</code>
           <ol>
@@ -3197,21 +3211,21 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         chromeImport: true
       }},
       wechat_channels: {{
-        target: '视频号公开视频',
+        target: '视频号草稿/待审核',
         credential: '/Users/wendy/content-toolkit/capabilities/publish/cookies/tencent_uploader/account.json',
-        action: '用于一键视频搬运。未登录时系统会打开视频号后台登录页。',
+        action: '用于一键视频搬运。未登录时系统会打开视频号后台登录页；默认只进入草稿/待审核，不会对外上线。',
         chromeImport: true
       }},
       bilibili: {{
-        target: 'Bilibili 公开视频',
+        target: 'Bilibili 仅自己可见视频',
         credential: '/Users/wendy/content-toolkit/capabilities/publish/cookies/bilibili_creator.json',
-        action: '用于一键视频搬运。未登录时系统会打开 Bilibili 登录流程。',
+        action: '用于一键视频搬运。未登录时系统会打开 Bilibili 登录流程；默认上传为仅自己可见。',
         chromeImport: true
       }},
       youtube: {{
-        target: 'YouTube public video',
+        target: 'YouTube private video',
         credential: '/Users/wendy/.config/park/youtube-oauth.json + youtube-token.json',
-        action: '用于一键视频搬运。未授权时系统会打开 OAuth 流程。',
+        action: '用于一键视频搬运。未授权时系统会打开 OAuth 流程；默认上传为 private。',
         oauthInstall: true
       }}
     }};
@@ -3535,7 +3549,9 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         return;
       }}
       try {{
-        const res = await fetch('/api/actions/recent', {{cache: 'no-store'}});
+        const sourceId = new URLSearchParams(window.location.search).get('source') || '';
+        const query = sourceId ? `?source_content_id=${{encodeURIComponent(sourceId)}}` : '';
+        const res = await fetch(`/api/actions/recent${{query}}`, {{cache: 'no-store'}});
         const data = await res.json();
         renderActionHistory(data);
       }} catch (error) {{
@@ -3675,10 +3691,17 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         return;
       }}
       try {{
+        const healthRes = await fetch('/api/health', {{cache: 'no-store'}});
+        const health = await readActionResponse(healthRes, '健康检查');
+        const missing = health.missing_required_tools || [];
+        if (missing.length) {{
+          runtimeNotice.querySelector('span').textContent = `本地动作服务已连接，但缺少工具：${{missing.map(item => item.name || item.path).join('、')}}。`;
+        }} else {{
+          runtimeNotice.querySelector('span').textContent = '本地动作服务已连接，核心工具就绪。';
+        }}
         const res = await fetch('/api/capabilities', {{cache: 'no-store'}});
         const data = await res.json();
         capabilities = data.platforms || {{}};
-        runtimeNotice.querySelector('span').textContent = '本地动作服务已连接。';
       }} catch (error) {{
         runtimeNotice.querySelector('span').textContent = '没有连上本地动作服务：请启动 workbench server 后刷新页面。';
       }}
@@ -3710,8 +3733,8 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         ? '这会写入平台草稿箱，但不会最终发布。'
         : mode === 'private_upload'
         ? platformId === 'bilibili'
-          ? '这会上传为 Bilibili 仅自己可见，不会公开发布；你仍需要在创作中心手动检查和发布。'
-          : '这会调用 YouTube API 上传为 private，不会公开发布；你仍需要在 YouTube Studio 手动检查和发布。'
+          ? '这会上传为 Bilibili 仅自己可见，不会对外上线；你仍需要在创作中心手动检查和发布。'
+          : '这会调用 YouTube API 上传为 private，不会对外上线；你仍需要在 YouTube Studio 手动检查和发布。'
         : '这会打开平台后台，并把标题/正文/视频路径复制到剪贴板；你需要在平台页面里手动粘贴、校对、保存或发送。';
       if (!dryRun && !confirm(`${{confirmTitle}}\\n\\n${{confirmNote}}`)) return;
       const res = await fetch('/api/actions/push-draft', {{
@@ -4353,29 +4376,30 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         connected: '已连接',
         needs_login: '需要登录',
         waiting_auth: '等待登录',
-        publishing: '发布中',
-        published: '已公开发布',
+        publishing: '搬运中',
+        published: '已完成',
         submitted_review: '已提交审核',
-        verified_public: '已公开视频',
-        public_uploaded: '已公开上传',
+        verified_public: '已验证视频',
+        public_uploaded: '已上传',
         found_in_manager: '已找到稿件',
         web_login_valid: '已连接',
         login_required: '需要登录',
         declaration_required: '需声明',
         upload_timeout: '上传超时',
         submit_not_confirmed: '提交未确认',
-        public_unavailable: '公开视频不可用',
-        public_unverified: '公开视频待验证',
+        public_unavailable: '视频不可用',
+        public_unverified: '视频待验证',
         blocked: '不可搬运',
         failed: '失败',
         checking: '检查中'
       }};
       if (item?.ok && stage === 'connected') return '已连接';
+      if (stage === 'done' || stage === 'self_only_uploaded' || stage === 'private_uploaded' || stage === 'draft_saved_in_platform') return '已搬运';
       return map[stage] || item?.status || stage;
     }}
     function migrationStageClass(item) {{
       const stage = item?.stage || item?.status || '';
-      if (item?.ok || ['published', 'connected', 'submitted_review', 'verified_public', 'public_uploaded', 'found_in_manager'].includes(stage)) return 'sent';
+      if (item?.ok || ['done', 'published', 'connected', 'submitted_review', 'verified_public', 'public_uploaded', 'found_in_manager', 'self_only_uploaded', 'private_uploaded', 'draft_saved_in_platform'].includes(stage)) return 'sent';
       if (['failed', 'blocked', 'login_required', 'declaration_required', 'upload_timeout', 'submit_not_confirmed', 'public_unavailable'].includes(stage)) return 'missing_asset';
       if (stage === 'waiting_auth' || stage === 'needs_login' || stage === 'checking' || stage === 'publishing') return 'review_needed';
       return 'draft';
@@ -4481,7 +4505,7 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         showCommand(serverLaunchCommand);
         return;
       }}
-      if (!options.skipConfirm && !confirm('确认公开发布到 视频号 / Bilibili / YouTube？\\n\\n这是公开发布动作，不是保存草稿。若有平台未登录，本次不会开始上传，页面会显示需要先登录的平台。')) return;
+      if (!options.skipConfirm && !confirm('确认搬运到 视频号草稿 / Bilibili仅自己可见 / YouTube private？\\n\\n这不会对外上线。若有平台未登录，本次不会开始上传，页面会显示需要先登录的平台。')) return;
       const running = {{
         ok: false,
         status: 'publishing',
@@ -4490,18 +4514,18 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
           label: platformLabels.get(platform) || platform,
           stage: 'publishing',
           status: 'publishing',
-          message: '正在检查并发布。'
+          message: '正在检查并搬运到草稿/私密。'
         }}))
       }};
       mergeMigrationRuntime(sourceContentId, running);
       try {{
         const data = await actionFetch('/api/actions/video-migration/run', {{
           source_content_id: sourceContentId,
-          publish_mode: 'public',
+          publish_mode: 'draft_private',
           confirmed: true
         }}, {{
           label: '一键视频搬运',
-          startMessage: '一键视频搬运已开始：正在检查 视频号 / Bilibili / YouTube。'
+          startMessage: '一键视频搬运已开始：正在检查 视频号草稿 / Bilibili仅自己可见 / YouTube private。'
         }});
         mergeMigrationRuntime(sourceContentId, data);
         const needsLogin = (data.platforms || []).filter(item => item && item.stage === 'needs_login');
@@ -4593,19 +4617,23 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
       const migrationStates = migrationPlatformIds.map(platformId => source.platforms[platformId]).filter(Boolean);
       const runtimeMigration = migrationRuntime[source.source_content_id] || null;
       const runtimePlatforms = new Map((runtimeMigration?.platforms || []).map(item => [item.platform, item]));
-      const migrationDone = runtimeMigration?.status === 'published' || (runtimeMigration?.platforms || []).length === migrationPlatformIds.length && (runtimeMigration?.platforms || []).every(item => item.ok && ['published', 'submitted_review', 'verified_public', 'public_uploaded', 'found_in_manager'].includes(item.stage || item.status)) || (migrationStates.length > 0 && migrationStates.every(state => ['sent', 'packaged'].includes(state.status)));
+      const migrationDone = ['done', 'published'].includes(runtimeMigration?.status) || (runtimeMigration?.platforms || []).length === migrationPlatformIds.length && (runtimeMigration?.platforms || []).every(item => item.ok && ['done', 'published', 'submitted_review', 'verified_public', 'public_uploaded', 'found_in_manager', 'self_only_uploaded', 'private_uploaded', 'draft_saved_in_platform'].includes(item.stage || item.status)) || (migrationStates.length > 0 && migrationStates.every(state => ['sent', 'packaged'].includes(state.status)));
       const migrationReady = source.media_count > 0 && migrationStates.some(state => !['sent', 'source_gallery', 'missing_asset'].includes(state.status));
+      const runtimeMigrationBlocked = runtimeMigration && ['blocked', 'failed', 'partial_failed'].includes(runtimeMigration.status);
+      const migrationCanRun = migrationReady && !runtimeMigrationBlocked;
       const migrationWaiting = runtimeMigration?.status === 'waiting_auth';
       const migrationFailed = runtimeMigration?.status === 'partial_failed';
       const migrationPublishing = runtimeMigration?.status === 'publishing';
-      const migrationButtonLabel = migrationDone ? '已完成三平台搬运' : isActionServerAvailable() ? '一键公开发布到 3 个平台' : '需要启动本地服务';
+      const migrationButtonLabel = migrationDone ? '已完成三平台搬运' : isActionServerAvailable() ? '一键搬运到 3 个平台（草稿/私密）' : '需要启动本地服务';
       const packageDone = Boolean(source.content_package_text) && Boolean(source.content_package_approved) && !(source.content_package_warnings || []).length;
       const packageWarn = Boolean(source.content_package_text) && (source.content_package_warnings || []).length > 0;
       const packageApproved = Boolean(source.content_package_approved);
       const wechatState = source.platforms.wechat_mp || {{}};
       const wechatDrafts = wechatState.drafts || [];
-      const wechatHasPreview = wechatDrafts.some(draft => draft.html_href || Object.values(draft.style_variants || {{}}).some(variant => variant && variant.html_preview_href));
-      const wechatHasDrafts = wechatDrafts.length > 0 || (wechatState.sent || []).length > 0;
+      const wechatHasPreview = wechatDrafts.some(draft => draft.is_current_wechat_workflow && (draft.html_href || Object.values(draft.style_variants || {{}}).some(variant => variant && variant.html_preview_href)));
+      const currentWechatDrafts = wechatDrafts.filter(draft => draft.is_current_wechat_workflow);
+      const legacyWechatDrafts = wechatDrafts.filter(draft => !draft.is_current_wechat_workflow);
+      const wechatHasDrafts = currentWechatDrafts.length > 0 || legacyWechatDrafts.length > 0 || (wechatState.sent || []).length > 0;
       const wechatReady = Boolean((wechatState.sent || []).length) || wechatHasPreview;
       const topicDone = Boolean(source.content_package_text) && topics.length > 0;
       const downstreamReviewIds = ['xiaohongshu', 'x'];
@@ -4622,7 +4650,7 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         const state = source.platforms[platformId];
         const runtimeState = runtimePlatforms.get(platformId);
         const label = platformLabels.get(platformId) || platformId;
-        const done = runtimeState ? ['published', 'submitted_review', 'verified_public', 'public_uploaded', 'found_in_manager'].includes(runtimeState.stage || runtimeState.status) || runtimeState.ok : ['sent', 'packaged'].includes(state.status);
+        const done = runtimeState ? ['done', 'published', 'submitted_review', 'verified_public', 'public_uploaded', 'found_in_manager', 'self_only_uploaded', 'private_uploaded', 'draft_saved_in_platform'].includes(runtimeState.stage || runtimeState.status) || runtimeState.ok : ['sent', 'packaged'].includes(state.status);
         const failed = runtimeState && ['failed', 'blocked'].includes(runtimeState.stage);
         const waiting = runtimeState && ['needs_login', 'waiting_auth', 'publishing', 'checking'].includes(runtimeState.stage);
         const message = runtimeState?.message || (done ? '已完成。' : state.next_action || '等待执行。');
@@ -4809,8 +4837,10 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
         const label = platformLabels.get(platformId) || platformId;
         const drafts = state.drafts || [];
         const hasPreview = drafts.some(draft => draft.html_href || Object.values(draft.style_variants || {{}}).some(variant => variant && variant.html_preview_href));
+        const currentDrafts = drafts.filter(draft => draft.is_current_wechat_workflow);
+        const renderDrafts = currentDrafts.length ? currentDrafts : drafts;
         const laneStatusClass = hasPreview || state.status === 'sent' ? 'sent' : drafts.length ? 'review_needed' : 'missing';
-        const laneStatusLabel = hasPreview || state.status === 'sent' ? '可预览' : drafts.length ? '旧占位草稿' : '待生成';
+        const laneStatusLabel = hasPreview || state.status === 'sent' ? '当前长文预览' : drafts.length ? '旧占位草稿' : '待生成';
         let cards = '';
         if (state.status === 'sent') {{
           cards = (state.sent || []).map(item => `<article class="draft-preview">
@@ -4818,7 +4848,7 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
             <p>${{link('打开 sent 记录', item.href)}}</p>
           </article>`).join('');
         }} else if (drafts.length) {{
-          cards = drafts.map((draft, index) => draftPreviewCard(platformId, state, draft, index)).join('');
+          cards = renderDrafts.map((draft, index) => draftPreviewCard(platformId, state, draft, index)).join('');
         }} else {{
           cards = `<article class="empty-node">
             <header><b>${{escapeHtml(state.label || '待生成公众号文章')}}</b></header>
@@ -4938,11 +4968,11 @@ def write_html(assets: list[dict], summary: list[dict], output_name: str = "work
           <header>
             <div>
               <h2>第一步：视频搬运</h2>
-              <p>只处理视频号、Bilibili、YouTube。默认公开发布；未登录的平台会先显示为需要登录，不会静默上传。</p>
+              <p>只处理视频号、Bilibili、YouTube。默认进入草稿/私密/待审核，不会对外上线；未登录的平台会先显示为需要登录，不会静默上传。</p>
             </div>
             <div class="step-status">
-              <span class="status ${{migrationDone ? 'sent' : migrationFailed ? 'missing_asset' : 'review_needed'}}">${{migrationDone ? '已完成' : migrationPublishing ? '发布中' : migrationWaiting ? '等待登录' : migrationFailed ? '部分失败' : '下一步'}}</span>
-              ${{migrationReady ? `<button class="action primary" type="button" data-action="batch-migrate-video" data-source-id="${{escapeHtml(source.source_content_id)}}" ${{migrationPublishing || migrationDone ? 'disabled' : ''}}>${{migrationButtonLabel}}</button>` : ''}}
+              <span class="status ${{migrationDone ? 'sent' : migrationFailed ? 'missing_asset' : 'review_needed'}}">${{migrationDone ? '已完成' : migrationPublishing ? '搬运中' : migrationWaiting ? '等待登录' : migrationFailed ? '部分失败' : '下一步'}}</span>
+              ${{migrationReady ? `<button class="action primary" type="button" data-action="batch-migrate-video" data-source-id="${{escapeHtml(source.source_content_id)}}" ${{migrationPublishing || migrationDone || !migrationCanRun ? 'disabled' : ''}}>${{migrationButtonLabel}}</button>` : ''}}
             </div>
           </header>
           <div class="migration-status-grid">${{migrationStatusItems}}</div>

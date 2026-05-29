@@ -26,6 +26,7 @@ SENT = OUTBOX / "sent"
 ACTION_DIR = OUTBOX / ".system/actions"
 ACTION_LOG = ACTION_DIR / "action-log.jsonl"
 VIDEO_MIGRATION_STATE = ACTION_DIR / "video-migration-state.json"
+WORKBENCH_STATE_DIR = ACTION_DIR / "state"
 EVIDENCE_DIR = OUTBOX / ".system/evidence"
 AUTH_QR_DIR = OUTBOX / ".system/auth-qrcodes"
 XHS_SKILL = ROOT / ".agents/skills/xiaohongshu-skills"
@@ -102,30 +103,30 @@ CAPABILITIES = {
     },
     "wechat_channels": {
         "label": "视频号",
-        "status": "public_publish_ready_needs_cookie",
-        "mode": "video_public_publish",
+        "status": "draft_ready_needs_cookie",
+        "mode": "video_draft_upload",
         "mutates_platform": True,
-        "final_publish": True,
+        "final_publish": False,
         "tool": str(WECHAT_CHANNELS_PUSH),
-        "notes": "使用 social-auto-upload TencentVideo 公开视频发布；需要有效 cookie。",
+        "notes": "使用 social-auto-upload TencentVideo 上传到视频号草稿/待审核；需要有效 cookie，不默认对外上线。",
     },
     "bilibili": {
         "label": "Bilibili",
-        "status": "public_upload_ready_needs_cookie",
-        "mode": "bilibili_public_upload",
+        "status": "self_only_upload_ready_needs_cookie",
+        "mode": "bilibili_self_only_upload",
         "mutates_platform": True,
-        "final_publish": True,
+        "final_publish": False,
         "tool": str(ROOT / "content-toolkit/capabilities/publish/uploader/bilibili_uploader/runtime.py"),
-        "notes": "账号 cookie 就绪后可公开视频投稿。",
+        "notes": "账号 cookie 就绪后上传为仅自己可见；不默认对外上线。",
     },
     "youtube": {
         "label": "YouTube",
-        "status": "public_upload_ready_needs_oauth",
-        "mode": "youtube_api_public_upload",
+        "status": "private_upload_ready_needs_oauth",
+        "mode": "youtube_api_private_upload",
         "mutates_platform": True,
-        "final_publish": True,
+        "final_publish": False,
         "tool": str(YOUTUBE_CHANNEL),
-        "notes": "Google OAuth 就绪后可公开视频上传。",
+        "notes": "Google OAuth 就绪后上传为 private；不默认对外上线。",
     },
     "zhihu": {
         "label": "知乎",
@@ -287,13 +288,62 @@ def save_video_migration_state(state: dict[str, Any]) -> None:
     tmp.replace(VIDEO_MIGRATION_STATE)
 
 
+def source_state_path(source_content_id: str) -> Path:
+    safe_id = "".join(ch for ch in source_content_id if ch.isalnum() or ch in {"-", "_"}) or "unknown"
+    return WORKBENCH_STATE_DIR / f"{safe_id}.json"
+
+
+def load_source_state(source_content_id: str) -> dict[str, Any]:
+    path = source_state_path(source_content_id)
+    if not path.exists():
+        return {"ok": True, "source_content_id": source_content_id, "updated_at": "", "steps": {}, "evidence": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {"ok": False, "source_content_id": source_content_id, "steps": {}, "evidence": []}
+    except (OSError, json.JSONDecodeError):
+        return {"ok": False, "source_content_id": source_content_id, "updated_at": "", "steps": {}, "evidence": []}
+
+
+def save_source_state(source_content_id: str, state: dict[str, Any]) -> None:
+    WORKBENCH_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state["source_content_id"] = source_content_id
+    state["updated_at"] = now_iso()
+    tmp = source_state_path(source_content_id).with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(source_state_path(source_content_id))
+
+
+def update_source_step_state(source_content_id: str, step: str, result: dict[str, Any]) -> None:
+    if not source_content_id:
+        return
+    state = load_source_state(source_content_id)
+    steps = state.setdefault("steps", {})
+    step_state: dict[str, Any] = {
+        "step": step,
+        "ok": bool(result.get("ok")),
+        "status": result.get("status") or ("done" if result.get("ok") else "failed"),
+        "stage": result.get("stage") or result.get("status") or ("done" if result.get("ok") else "failed"),
+        "message": result.get("message") or "",
+        "updated_at": now_iso(),
+    }
+    for key in ("platforms", "next_action", "evidence"):
+        if result.get(key):
+            step_state[key] = result.get(key)
+    steps[step] = step_state
+    evidence = state.setdefault("evidence", [])
+    for item in result.get("evidence") or []:
+        if isinstance(item, dict) and item not in evidence:
+            evidence.append(item)
+    save_source_state(source_content_id, state)
+
+
 def persisted_video_migration_platform(source_content_id: str, platform: str) -> dict[str, Any]:
     item = (load_video_migration_state().get(source_content_id) or {}).get(platform)
     return item if isinstance(item, dict) else {}
 
 
 def update_video_migration_state(source_content_id: str, platform: str, result: dict[str, Any]) -> None:
-    stage = "published" if result.get("ok") else "failed"
+    stage = "done" if result.get("ok") else "failed"
     if result.get("ok") and result.get("status") in {"submitted_review", "found_in_manager"}:
         stage = "submitted_review"
     elif result.get("ok") and result.get("status") in {"verified_public", "public_uploaded"}:
@@ -312,9 +362,21 @@ def update_video_migration_state(source_content_id: str, platform: str, result: 
         "video_id": result.get("video_id") or "",
         "evidence_screenshot": result.get("evidence_screenshot") or "",
         "evidence_screenshot_href": result.get("evidence_screenshot_href") or "",
+        "evidence": result.get("evidence") or [],
         "result": result,
     }
     save_video_migration_state(state)
+    update_source_step_state(
+        source_content_id,
+        "video_migration",
+        {
+            "ok": True,
+            "status": "done",
+            "stage": "done",
+            "message": "视频搬运状态已更新。",
+            "evidence": source_state[platform].get("evidence") or [],
+        },
+    )
 
 
 def evidence_href(path: str | Path) -> str:
@@ -359,6 +421,15 @@ def capture_video_migration_evidence(source_content_id: str, platform: str, resu
     if completed.get("returncode") == 0 and parsed.get("ok") and output.exists():
         enriched["evidence_screenshot"] = str(output)
         enriched["evidence_screenshot_href"] = evidence_href(output)
+    evidence_items = []
+    if enriched.get("platform_url") or enriched.get("url"):
+        evidence_items.append({"platform": platform, "kind": "url", "value": enriched.get("platform_url") or enriched.get("url"), "at": now_iso()})
+    if enriched.get("video_id"):
+        evidence_items.append({"platform": platform, "kind": "video_id", "value": enriched.get("video_id"), "at": now_iso()})
+    if enriched.get("evidence_screenshot_href"):
+        evidence_items.append({"platform": platform, "kind": "screenshot", "value": enriched.get("evidence_screenshot_href"), "at": now_iso()})
+    if evidence_items:
+        enriched["evidence"] = [*(enriched.get("evidence") or []), *evidence_items]
     return enriched
 
 
@@ -391,19 +462,22 @@ def compact_action(entry: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def recent_actions(limit: int = 30) -> dict[str, Any]:
+def recent_actions(limit: int = 30, source_content_id: str = "") -> dict[str, Any]:
     if not ACTION_LOG.exists():
         return {"ok": True, "actions": []}
     lines = ACTION_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
     actions = []
-    for line in reversed(lines[-max(limit * 3, limit):]):
+    for line in reversed(lines[-max(limit * 10, limit):]):
         try:
-            actions.append(compact_action(json.loads(line)))
+            action = compact_action(json.loads(line))
         except json.JSONDecodeError:
             continue
+        if source_content_id and action.get("source_content_id") != source_content_id:
+            continue
+        actions.append(action)
         if len(actions) >= limit:
             break
-    return {"ok": True, "actions_log": str(ACTION_LOG), "actions": actions}
+    return {"ok": True, "actions_log": str(ACTION_LOG), "source_content_id": source_content_id, "actions": actions}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -473,7 +547,7 @@ def check_auth_artifacts() -> dict[str, Any]:
 
 
 def wait_auth_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
-    timeout_seconds = min(max(int(payload.get("timeout_seconds") or 120), 5), 600)
+    timeout_seconds = min(max(int(payload.get("timeout_seconds") or 2), 1), 600)
     interval_seconds = min(max(float(payload.get("interval_seconds") or 2), 0.5), 10)
     started = time.time()
     initial = check_auth_artifacts()
@@ -582,7 +656,7 @@ def restart_auth_prompts(payload: dict[str, Any]) -> dict[str, Any]:
             "status": "confirmation_required",
             "message": "这是会重启扫码/登录/OAuth 入口的动作，需要 confirmed=true。",
         }
-    checks = check_all_channels()
+    checks = check_all_channels(deep=True)
     channels_by_platform = {str(item.get("platform") or ""): item for item in checks.get("channels") or []}
     sessions = {
         "xiaohongshu": XHS_LOGIN_SESSION,
@@ -1712,7 +1786,7 @@ def push_wechat_channels_draft(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "status": "published" if publish_mode == "public" else "draft_saved_in_platform",
-        "message": "已提交公开视频号发布。" if publish_mode == "public" else "已保存到视频号草稿箱。",
+        "message": "已提交视频号上线。" if publish_mode == "public" else "已保存到视频号草稿箱。",
         **result,
     }
 
@@ -1782,17 +1856,17 @@ def verify_youtube_public_video(video_id: str, title: str = "") -> dict[str, Any
                     "ok": False,
                     "status": "youtube_too_long" if too_long else "youtube_unavailable",
                     "url": url,
-                    "message": "YouTube 已上传但公开视频不可用，可能仍受长视频权限、处理或版权限制影响。",
+                    "message": "YouTube 已上传但公开视频页不可用，可能仍受长视频权限、处理或版权限制影响。",
                 }
             if title_ok:
-                return {"ok": True, "status": "verified_public", "url": url, "message": "YouTube 公开视频页已验证。"}
-            last_error = "公开视频页已打开，但没有验证到标题。"
+                return {"ok": True, "status": "verified_public", "url": url, "message": "YouTube 视频页已验证。"}
+            last_error = "YouTube 视频页已打开，但没有验证到标题。"
         except URLError as exc:
             last_error = str(exc)
         except OSError as exc:
             last_error = str(exc)
         time.sleep(10)
-    return {"ok": False, "status": "public_unverified", "url": url, "message": last_error or "YouTube 公开视频暂未验证成功。"}
+    return {"ok": False, "status": "public_unverified", "url": url, "message": last_error or "YouTube 视频页暂未验证成功。"}
 
 
 def preflight_platform(platform: str, source_content_id: str) -> dict[str, Any]:
@@ -2011,7 +2085,7 @@ def push_youtube_upload(payload: dict[str, Any]) -> dict[str, Any]:
         "draft_json": str(draft["json_path"]),
         "result": parsed or run,
         "platform_url": parsed.get("url") or PLATFORM_URLS["youtube"],
-        "message": parsed.get("message") or ("已公开发布到 YouTube。" if ok and privacy_status == "public" else f"YouTube {privacy_status} 上传未完成，请查看 result。"),
+        "message": parsed.get("message") or ("已对外上线到 YouTube。" if ok and privacy_status == "public" else f"YouTube {privacy_status} 上传未完成，请查看 result。"),
         "privacy_status": privacy_status,
     }
     if verified is not None:
@@ -2114,7 +2188,7 @@ def push_bilibili_upload(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
             "status": "self_only_upload_dry_run" if only_self else "public_upload_dry_run",
-            "message": "dry-run: 可上传为 Bilibili 公开投稿。" if not only_self else "dry-run: 可上传为 Bilibili 仅自己可见视频；不会公开发布。",
+            "message": "dry-run: 可上传为 Bilibili 公开投稿。" if not only_self else "dry-run: 可上传为 Bilibili 仅自己可见视频；不会对外上线。",
             **result,
         }
     completed = run_command(command, cwd=PUBLISH_ROOT if only_self else BILIBILI_WEB_UPLOAD.parent, timeout=3600)
@@ -2166,7 +2240,7 @@ def push_bilibili_self_only_upload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def video_migration_platform_status(platform: str, source_content_id: str) -> dict[str, Any]:
     persisted = persisted_video_migration_platform(source_content_id, platform)
-    if persisted.get("ok") and persisted.get("stage") in {"published", "submitted_review"}:
+    if persisted.get("ok") and persisted.get("stage") in {"done", "published", "submitted_review"}:
         return {
             **persisted,
             "platform": platform,
@@ -2225,7 +2299,7 @@ def video_migration_platform_status(platform: str, source_content_id: str) -> di
         "ok": bool(channel.get("ok")),
         "stage": "connected" if channel.get("ok") else "needs_login",
         "status": channel.get("status") or "unchecked",
-        "message": "已连接，可以公开发布。" if channel.get("ok") else channel.get("next_step") or "需要登录或授权。",
+        "message": "已连接，可以搬运到草稿/私密状态。" if channel.get("ok") else channel.get("next_step") or "需要登录或授权。",
         "channel": channel,
         "media_file": media_file,
         "video_prepare": video_prepare,
@@ -2243,15 +2317,28 @@ def video_migration_status(payload: dict[str, Any]) -> dict[str, Any]:
     platforms = [video_migration_platform_status(platform, source_content_id) for platform in VIDEO_MIGRATION_ORDER]
     blocked = [item for item in platforms if item.get("stage") == "blocked"]
     needs_login = [item for item in platforms if item.get("stage") == "needs_login"]
-    done = [item for item in platforms if item.get("ok") and item.get("stage") in {"published", "submitted_review"}]
-    return {
+    done_stages = {"done", "submitted_review", "self_only_uploaded", "private_uploaded", "draft_saved_in_platform"}
+    done = [item for item in platforms if item.get("ok") and item.get("stage") in done_stages]
+    status_value = "done" if len(done) == len(VIDEO_MIGRATION_ORDER) else "ready" if not blocked and not needs_login else "blocked" if blocked else "needs_login"
+    status_message = {
+        "done": "三个平台已完成草稿/私密/待审核搬运。",
+        "ready": "三个平台已连接，可以开始搬运到草稿/私密/待审核。",
+        "blocked": "当前源内容不适合视频搬运，请查看平台卡片原因。",
+        "needs_login": "有平台需要登录或授权，完成后再继续搬运。",
+    }[status_value]
+    result = {
         "ok": not blocked and not needs_login,
-        "status": "published" if len(done) == len(VIDEO_MIGRATION_ORDER) else "ready" if not blocked and not needs_login else "blocked" if blocked else "needs_login",
+        "status": status_value,
         "source_content_id": source_content_id,
         "title": asset.get("title") or "",
-        "publish_mode": "public",
+        "publish_mode": "draft_private",
         "platforms": platforms,
+        "message": status_message,
+        "state": load_source_state(source_content_id),
     }
+    update_source_step_state(source_content_id, "video_migration", {**result, "stage": result["status"]})
+    result["state"] = load_source_state(source_content_id)
+    return result
 
 
 def ensure_video_migration_draft(platform: str, source_content_id: str) -> dict[str, Any]:
@@ -2271,14 +2358,14 @@ def push_video_migration_platform(platform: str, source_content_id: str, local_i
         "source_content_id": source_content_id,
         "local_id": local_id,
         "confirmed": True,
-        "publish_mode": "public",
+        "publish_mode": "draft_private",
     }
     if platform == "wechat_channels":
         return push_wechat_channels_draft(payload)
     if platform == "bilibili":
-        return push_bilibili_upload(payload)
+        return push_bilibili_self_only_upload(payload)
     if platform == "youtube":
-        return push_youtube_upload({**payload, "privacy_status": "public"})
+        return push_youtube_upload({**payload, "privacy_status": "private"})
     return unsupported_platform_response(platform, payload)
 
 
@@ -2292,7 +2379,7 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "status": "confirmation_required",
             "source_content_id": source_content_id,
-            "message": "这是公开发布到 视频号 / Bilibili / YouTube 的动作，需要 confirmed=true。",
+            "message": "这是搬运到 视频号草稿 / Bilibili仅自己可见 / YouTube private 的动作，需要 confirmed=true。",
         }
     status = video_migration_status({"source_content_id": source_content_id})
     results: list[dict[str, Any]] = []
@@ -2310,7 +2397,7 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
                         "stage": "needs_login",
                         "status": platform_state.get("status") or "needs_login",
                         "message": platform_state.get("message") or f"需要先完成{platform_label(platform)}登录授权。",
-                        "next_action": f"请先完成{platform_label(platform)}登录授权，然后重新点击一键公开发布。",
+                        "next_action": {"label": f"登录{platform_label(platform)}", "endpoint": "/api/actions/prepare-channel", "payload": {"platform": platform}},
                     }
                 )
             elif platform_state.get("stage") == "blocked":
@@ -2321,29 +2408,30 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
                         **platform_state,
                         "stage": "connected",
                         "status": platform_state.get("status") or "connected",
-                        "message": "已连接，等待其他平台登录完成后再统一公开发布。",
+                        "message": "已连接，等待其他平台登录完成后再统一搬运到草稿/私密。",
                     }
                 )
         result = {
             "ok": False,
             "status": "needs_login" if needs_login_states else "blocked",
             "source_content_id": source_content_id,
-            "publish_mode": "public",
+            "publish_mode": "draft_private",
             "platforms": results,
             "message": "需要先完成平台登录；为避免部分平台误发，本次没有开始上传。",
         }
+        update_source_step_state(source_content_id, "video_migration", {**result, "stage": result["status"]})
         write_log({"action": "video_migration_batch", "request": payload, "result": result})
         return result
 
     waiting_auth = False
     for platform_state in status_platforms:
         platform = str(platform_state.get("platform") or "")
-        if platform_state.get("ok") and platform_state.get("stage") in {"published", "submitted_review"}:
+        if platform_state.get("ok") and platform_state.get("stage") in {"done", "submitted_review", "self_only_uploaded", "private_uploaded", "draft_saved_in_platform"}:
             results.append(
                 {
                     **platform_state,
-                    "stage": platform_state.get("stage") or "published",
-                    "status": platform_state.get("status") or "published",
+                    "stage": platform_state.get("stage") or "done",
+                    "status": platform_state.get("status") or "done",
                     "message": platform_state.get("message") or "已完成，跳过重复上传。",
                 }
             )
@@ -2359,7 +2447,7 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
                     "stage": "needs_login",
                     "status": platform_state.get("status") or "needs_login",
                     "message": platform_state.get("message") or f"需要先完成{platform_label(platform)}登录授权。",
-                    "next_action": f"请先完成{platform_label(platform)}登录授权，然后重新点击一键公开发布。",
+                    "next_action": {"label": f"登录{platform_label(platform)}", "endpoint": "/api/actions/prepare-channel", "payload": {"platform": platform}},
                 }
             )
             waiting_auth = True
@@ -2387,9 +2475,9 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 **platform_state,
                 "ok": bool(published.get("ok")),
-                "stage": "submitted_review" if published.get("ok") and published.get("status") in {"submitted_review", "found_in_manager"} else "published" if published.get("ok") else "failed",
-                "status": published.get("status") or ("published" if published.get("ok") else "failed"),
-                "message": published.get("message") or ("已公开发布。" if published.get("ok") else "发布失败。"),
+                "stage": "submitted_review" if published.get("ok") and published.get("status") in {"submitted_review", "found_in_manager"} else "done" if published.get("ok") else "failed",
+                "status": published.get("status") or ("done" if published.get("ok") else "failed"),
+                "message": published.get("message") or ("已搬运到草稿/私密状态。" if published.get("ok") else "搬运失败。"),
                 "local_id": draft.get("local_id") or "",
                 "result": published,
                 "platform_url": published.get("platform_url") or published.get("url") or PLATFORM_URLS.get(platform, ""),
@@ -2397,15 +2485,16 @@ def run_video_migration(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
     ok = bool(results) and all(item.get("ok") for item in results)
-    final_status = "published" if ok else "waiting_auth" if waiting_auth else "partial_failed"
+    final_status = "done" if ok else "waiting_auth" if waiting_auth else "partial_failed"
     result = {
         "ok": ok,
         "status": final_status,
         "source_content_id": source_content_id,
-        "publish_mode": "public",
+        "publish_mode": "draft_private",
         "platforms": results,
-        "message": "三个平台已提交；YouTube 为公开视频，视频号/Bilibili 可能处于审核或转码中。" if ok else "部分平台需要登录或发布失败，请看各平台卡片。",
+        "message": "三个平台已搬运到草稿/私密/待审核状态；需要你到平台后台最终检查发布。" if ok else "部分平台需要登录或搬运失败，请看各平台卡片。",
     }
+    update_source_step_state(source_content_id, "video_migration", {**result, "stage": final_status})
     write_log({"action": "video_migration_batch", "request": payload, "result": result})
     return result
 
@@ -2525,7 +2614,7 @@ def check_channel(platform: str) -> dict[str, Any]:
                 "tool": str(WECHAT_CHANNELS_PUSH),
                 "check_result": parsed or result,
                 "setup_command": setup_command_for(platform),
-                    "next_step": "视频号 cookie 有效；可以执行一键公开发布。" if check_ok else "视频号 cookie 存在但校验失败；需要重新登录。",
+                    "next_step": "视频号 cookie 有效；可以搬运到视频号草稿/待审核。" if check_ok else "视频号 cookie 存在但校验失败；需要重新登录。",
             }
         return {
             "ok": False,
@@ -2534,7 +2623,7 @@ def check_channel(platform: str) -> dict[str, Any]:
             "account_file": str(WECHAT_CHANNELS_ACCOUNT),
             "tool": str(WECHAT_CHANNELS_PUSH),
             "setup_command": setup_command_for(platform),
-            "next_step": "需要先登录视频号；本次不会开始上传。请完成登录后重新点击一键公开发布。",
+            "next_step": "需要先登录视频号；本次不会开始上传。请完成登录后重新点击一键搬运。",
         }
     if platform == "bilibili":
         runtime = ROOT / ".social-auto-upload/tools/biliup/macos-aarch64/biliup"
@@ -2548,7 +2637,7 @@ def check_channel(platform: str) -> dict[str, Any]:
             "web_uploader_exists": BILIBILI_WEB_UPLOAD.exists(),
             "python": str(PUBLISH_PYTHON),
             "python_exists": PUBLISH_PYTHON.exists(),
-            "safe_mode": "web_public_upload",
+            "safe_mode": "web_self_only_upload",
             "setup_command": setup_command_for(platform),
         }
         if BILIBILI_ACCOUNT.exists() and BILIBILI_WEB_UPLOAD.exists() and PUBLISH_PYTHON.exists():
@@ -2567,7 +2656,7 @@ def check_channel(platform: str) -> dict[str, Any]:
                 "ok": ok,
                 "status": "web_login_valid" if ok else (parsed.get("status") or "cookie_invalid"),
                 "check_result": parsed or scrub_command_result(result),
-                "next_step": "Bilibili 网页投稿登录态可用；可以执行一键公开发布。" if ok else "Bilibili 登录态不可用；请重新登录 Bilibili。",
+                "next_step": "Bilibili 网页投稿登录态可用；可以上传为仅自己可见。" if ok else "Bilibili 登录态不可用；请重新登录 Bilibili。",
             }
         missing_parts = []
         if not BILIBILI_ACCOUNT.exists():
@@ -2599,9 +2688,9 @@ def check_channel(platform: str) -> dict[str, Any]:
             "client_file_candidates": parsed.get("credential_candidates") or [],
             "client_secret": parsed.get("client_secret") or "",
             "token_file": parsed.get("token_file") or str(ROOT / ".config/park/youtube-token.json"),
-            "safe_mode": "api_public_upload",
+            "safe_mode": "api_private_upload",
             "setup_command": setup_command_for(platform),
-            "next_step": "YouTube OAuth 已就绪；可以执行一键公开发布。" if ok else (parsed.get("message") or "缺 YouTube OAuth client/token。"),
+            "next_step": "YouTube OAuth 已就绪；可以上传为 private。" if ok else (parsed.get("message") or "缺 YouTube OAuth client/token。"),
         }
     if platform == "x":
         return {
@@ -2624,22 +2713,45 @@ def check_channel(platform: str) -> dict[str, Any]:
     return {"ok": False, "platform": platform, "status": "not_implemented"}
 
 
-def check_all_channels() -> dict[str, Any]:
+def quick_channel_status(platform: str) -> dict[str, Any]:
+    artifacts = auth_artifacts()
+    platform_artifacts = artifacts.get(platform) or []
+    artifact_ready = any(item.get("exists") for item in platform_artifacts)
+    if platform == "youtube":
+        artifact_ready = (
+            any(item.get("exists") and item.get("label") == "YouTube OAuth client" for item in platform_artifacts)
+            and any(item.get("exists") and item.get("label") == "YouTube OAuth token" for item in platform_artifacts)
+        )
+    capability = CAPABILITIES.get(platform) or {}
+    return {
+        "ok": bool(artifact_ready) or platform in {"x", "zhihu"},
+        "platform": platform,
+        "status": "artifact_ready" if artifact_ready else ("handoff_ready" if platform in {"x", "zhihu"} else "artifact_missing"),
+        "label": platform_label(platform),
+        "capability": capability,
+        "auth_artifacts": platform_artifacts,
+        "next_step": "快速检查只看本地授权产物；需要深度校验时再点单个平台检查。",
+    }
+
+
+def check_all_channels(deep: bool = False) -> dict[str, Any]:
     checks = []
     for platform in CHANNELS:
-        checks.append(check_channel(platform))
+        checks.append(check_channel(platform) if deep else quick_channel_status(platform))
     ready = [item for item in checks if item.get("ok")]
     needs_setup = [item for item in checks if not item.get("ok")]
     return {
         "ok": True,
-        "status": "checked",
+        "status": "deep_checked" if deep else "quick_checked",
         "checked_at": now_iso(),
+        "deep": deep,
         "ready_count": len(ready),
         "needs_setup_count": len(needs_setup),
         "auth_artifacts": auth_artifacts(),
         "auth_qrcodes": collect_auth_qrcodes(),
         "login_sessions": login_sessions_status(),
         "channels": checks,
+        "message": "已完成快速通道检查。" if not deep else "已完成深度通道检查。",
     }
 
 
@@ -2771,7 +2883,7 @@ def prepare_missing_channels(payload: dict[str, Any]) -> dict[str, Any]:
             "status": "confirmation_required",
             "message": "这是会打开多个通道准备流程的动作，需要 confirmed=true。",
         }
-    checks = check_all_channels()
+    checks = check_all_channels(deep=True)
     actions = []
     for channel in checks.get("channels", []):
         platform = str(channel.get("platform") or "")
@@ -2861,6 +2973,24 @@ def prepare_next_auth_channel(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_channel_routes(payload: dict[str, Any]) -> dict[str, Any]:
+    if not bool(payload.get("confirmed")):
+        checks = check_all_channels(deep=False)
+        return {
+            "ok": True,
+            "status": "quick_channel_routes_checked",
+            "result": checks,
+            "summary": {
+                "ready_count": checks.get("ready_count"),
+                "needs_auth_count": checks.get("needs_setup_count"),
+                "code_or_runtime_gap_count": 0,
+                "dry_run_ok_count": 0,
+            },
+            "next_auth": {},
+            "source": {},
+            "dry_runs": [],
+            "channels": checks.get("channels") or [],
+            "message": "已完成快速通道路由检查；深度验收需要 confirmed=true。",
+        }
     command = [sys.executable, str(CHECK_PLATFORM_CHANNELS), "--json"]
     source_content_id = str(payload.get("source_content_id") or "")
     if source_content_id:
@@ -3313,7 +3443,7 @@ def handle_push_draft(payload: dict[str, Any]) -> dict[str, Any]:
                 "ok": False,
                 "status": "confirmation_required",
                 "platform": platform,
-                "message": "这是会上传 YouTube private 视频的动作，需要 confirmed=true；不会公开视频。",
+                "message": "这是会上传 YouTube private 视频的动作，需要 confirmed=true；不会对外上线。",
             }
             write_log({"action": "youtube_private_upload", "platform": platform, "request": payload, "result": result})
             return result
@@ -3329,7 +3459,7 @@ def handle_push_draft(payload: dict[str, Any]) -> dict[str, Any]:
                 "ok": False,
                 "status": "confirmation_required",
                 "platform": platform,
-                "message": "这是会上传 Bilibili 仅自己可见视频的动作，需要 confirmed=true；不会公开发布。",
+                "message": "这是会上传 Bilibili 仅自己可见视频的动作，需要 confirmed=true；不会对外上线。",
             }
             write_log({"action": "bilibili_self_only_upload", "platform": platform, "request": payload, "result": result})
             return result
@@ -3435,7 +3565,9 @@ class WorkbenchHandler(SimpleHTTPRequestHandler):
             self.send_json({"ok": True, "platforms": CAPABILITIES, "platform_urls": PLATFORM_URLS})
             return
         if route == "/api/actions/recent":
-            self.send_json(recent_actions())
+            query = parse_qs(parsed_url.query)
+            source_content_id = (query.get("source_content_id") or [""])[0]
+            self.send_json(recent_actions(source_content_id=source_content_id))
             return
         if route == "/api/actions/video-migration/status":
             query = parse_qs(parsed_url.query)
@@ -3512,7 +3644,7 @@ class WorkbenchHandler(SimpleHTTPRequestHandler):
                         result = {"ok": False, "status": "error", "platform": payload.get("platform") or "", "message": str(exc)}
                 write_log({"action": "handoff_platform", "platform": payload.get("platform") or "", "request": payload, "result": result})
             elif route == "/api/actions/check-all-channels":
-                result = check_all_channels()
+                result = check_all_channels(deep=bool(payload.get("deep")))
                 write_log({"action": "check_all_channels", "request": payload, "result": result})
             elif route == "/api/actions/check-auth-artifacts":
                 result = check_auth_artifacts()
@@ -3665,7 +3797,7 @@ def main() -> None:
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), WorkbenchHandler)
     print(f"Park-IO outbox workbench: http://{args.host}:{args.port}/dashboard.html")
-    print("Video migration can publicly publish to configured platforms after explicit confirmation.")
+    print("Video migration uploads to draft/private/review states after explicit confirmation.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
