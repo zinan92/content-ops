@@ -1,0 +1,614 @@
+{
+  "version": "v2",
+  "title": "Park-IO Content Repurpose Workflow",
+  "subtitle": "抖音源视频 → 整理选题 → 三平台分发 → 审核发布。小红书 path 是主线，新增 Layer 1 硬 fail + Layer 2 dbs 9 维评分。",
+  "canvas": {
+    "w": 1720,
+    "h": 1500
+  },
+  "notes": [
+    "源采集是 3 平台共享的：MLX Whisper 本地转录 + AI 整理 + 确定性选题切分，没有 AI 路由。",
+    "小红书是主线（lane 最宽）：刚加了 Layer 1（quality_xiaohongshu_drafts.py 硬 fail）+ Layer 2（dbs_xhs_review.py 用 dbs-content 风格做 9 维 LLM 评分）。",
+    "公众号 API 偶发 40164（IP 未白名单），DOCX 手工兜底走 build_wechat_mp_docx.py。",
+    "X 是最简 path：没有自动质检，直接人工读一遍发。",
+    "视频号 / B站 / YouTube 是「上传即归档」的搬运操作，不进改写流水线，这里不画。"
+  ],
+  "lanes": [
+    {
+      "id": "source",
+      "title": "源采集：转录 → 整理 → 选题（三平台共享）",
+      "x": 60,
+      "y": 80,
+      "w": 1600,
+      "h": 320
+    },
+    {
+      "id": "wechat_mp",
+      "title": "公众号长文",
+      "x": 60,
+      "y": 430,
+      "w": 400,
+      "h": 850
+    },
+    {
+      "id": "xhs",
+      "title": "小红书图文卡（双层质检 — 本次重做）",
+      "x": 480,
+      "y": 430,
+      "w": 620,
+      "h": 850
+    },
+    {
+      "id": "x_post",
+      "title": "X 推文 / Thread",
+      "x": 1120,
+      "y": 430,
+      "w": 540,
+      "h": 850
+    },
+    {
+      "id": "deliver",
+      "title": "状态、归档与发布",
+      "x": 60,
+      "y": 1310,
+      "w": 1600,
+      "h": 170
+    }
+  ],
+  "nodes": [
+    {
+      "id": "douyin_source",
+      "lane": "source",
+      "role": "entry",
+      "type": "entry",
+      "title": "抖音源视频入口",
+      "x": 200,
+      "y": 120,
+      "w": 400,
+      "h": 140,
+      "body": [
+        "save_douyin_sent.py 从 URL 拉取",
+        "outbox/sent/douyin/<dir>/",
+        "唯一可信源"
+      ]
+    },
+    {
+      "id": "transcribe_mlx",
+      "lane": "source",
+      "role": "process",
+      "type": "local_model",
+      "title": "MLX Whisper 转录",
+      "x": 660,
+      "y": 120,
+      "w": 400,
+      "h": 140,
+      "body": [
+        "transcribe_douyin_mlx.py",
+        "本地推理无 API 调用",
+        "输出 transcript/raw.json + raw.md"
+      ]
+    },
+    {
+      "id": "organize_transcript",
+      "lane": "source",
+      "role": "process",
+      "type": "ai",
+      "title": "整理转录",
+      "x": 1120,
+      "y": 120,
+      "w": 400,
+      "h": 140,
+      "body": [
+        "organize_douyin_transcripts.py",
+        "口播 raw → 可读 organized",
+        "所有平台改写的输入"
+      ]
+    },
+    {
+      "id": "topic_plan",
+      "lane": "source",
+      "role": "process",
+      "type": "script",
+      "title": "确定性选题切分（扇出锚点）",
+      "x": 620,
+      "y": 280,
+      "w": 480,
+      "h": 110,
+      "body": [
+        "build_dashboard.py 写 topic-plans.json",
+        "一个 source 切 main / secondary / discard",
+        "三个平台都从这里取主题"
+      ]
+    },
+    {
+      "id": "wechat_generate",
+      "lane": "wechat_mp",
+      "role": "process",
+      "type": "ai",
+      "title": "生成公众号长文",
+      "x": 80,
+      "y": 470,
+      "w": 360,
+      "h": 170,
+      "body": [
+        "generate_wechat_mp_article.py",
+        "中文长文 + 配图",
+        "一个 topic → 一个 draft"
+      ]
+    },
+    {
+      "id": "wechat_html",
+      "lane": "wechat_mp",
+      "role": "process",
+      "type": "script",
+      "title": "生成双 HTML",
+      "x": 80,
+      "y": 660,
+      "w": 360,
+      "h": 170,
+      "body": [
+        "<draft>.html dashboard 预览",
+        "<draft>.wechat.html 内联 style",
+        "WeChat 兼容靠 inline + 真图"
+      ]
+    },
+    {
+      "id": "wechat_push",
+      "lane": "wechat_mp",
+      "role": "decision",
+      "type": "script",
+      "title": "API 推送 → DOCX 兜底",
+      "x": 80,
+      "y": 850,
+      "w": 360,
+      "h": 170,
+      "body": [
+        "优先 /api/actions/push-draft",
+        "失败回 40164 走 build_wechat_mp_docx.py",
+        "后台手动文档导入"
+      ]
+    },
+    {
+      "id": "wechat_sink",
+      "lane": "wechat_mp",
+      "role": "artifact",
+      "type": "sink",
+      "title": "公众号草稿",
+      "x": 80,
+      "y": 1040,
+      "w": 360,
+      "h": 220,
+      "body": [
+        "公众号后台草稿箱",
+        "人工审首图 / 标题 / 完整性",
+        "通过后手动群发"
+      ]
+    },
+    {
+      "id": "xhs_generate",
+      "lane": "xhs",
+      "role": "process",
+      "type": "ai",
+      "title": "生成 XHS 初稿",
+      "x": 500,
+      "y": 470,
+      "w": 580,
+      "h": 110,
+      "body": [
+        "generate_xiaohongshu_from_content_package.py",
+        "一个 main topic → 一个 draft",
+        "含 image_cards + note_brief"
+      ]
+    },
+    {
+      "id": "xhs_polish",
+      "lane": "xhs",
+      "role": "process",
+      "type": "ai",
+      "title": "Polish 改写（模板化）",
+      "x": 500,
+      "y": 600,
+      "w": 580,
+      "h": 110,
+      "body": [
+        "polish_xiaohongshu_drafts.py",
+        "CARD_PLAN_TEMPLATES：conclusion_first / suspense_first",
+        "卡片角色化：cover / misunderstanding / reasoning / method / ..."
+      ]
+    },
+    {
+      "id": "xhs_layer1",
+      "lane": "xhs",
+      "role": "decision",
+      "type": "script",
+      "title": "Layer 1 硬 fail（本次新增）",
+      "x": 500,
+      "y": 730,
+      "w": 580,
+      "h": 140,
+      "body": [
+        "quality_xiaohongshu_drafts.py（瘦身后 310 行）",
+        "字符串 marker leak / 口播残留 / ops 泄漏",
+        "卡片字数 70-260 / 角色齐全 / 与 source 重合度",
+        "不过 → 直接进 action queue，不进 Layer 2"
+      ]
+    },
+    {
+      "id": "xhs_layer2",
+      "lane": "xhs",
+      "role": "decision",
+      "type": "ai",
+      "title": "Layer 2 dbs 9 维评分（本次新增）",
+      "x": 500,
+      "y": 890,
+      "w": 580,
+      "h": 160,
+      "body": [
+        "dbs_xhs_review.py + claude -p 子进程 + Sonnet",
+        "9 维：痛点 / 独立 / 可信 / 反常识 / 冲突 / 主张 / 悬念 / 张力 / 落差",
+        "verdict ∈ keep / rewrite / kill；suspense.structural 标模板锁",
+        "$0.18/篇，~60s"
+      ]
+    },
+    {
+      "id": "xhs_render",
+      "lane": "xhs",
+      "role": "process",
+      "type": "script",
+      "title": "渲染图文卡",
+      "x": 500,
+      "y": 1070,
+      "w": 580,
+      "h": 100,
+      "body": [
+        "render_xiaohongshu_cards.py",
+        "HTML/CSS + Chrome headless",
+        "8-10 张 PNG package"
+      ]
+    },
+    {
+      "id": "xhs_sink",
+      "lane": "xhs",
+      "role": "artifact",
+      "type": "sink",
+      "title": "小红书草稿",
+      "x": 500,
+      "y": 1190,
+      "w": 580,
+      "h": 80,
+      "body": [
+        "outbox/drafts/xiaohongshu/<draft-id>/",
+        "rendered package + DBS 评分写回 JSON"
+      ]
+    },
+    {
+      "id": "x_generate",
+      "lane": "x_post",
+      "role": "process",
+      "type": "ai",
+      "title": "生成 X 推文 / Thread",
+      "x": 1140,
+      "y": 470,
+      "w": 500,
+      "h": 180,
+      "body": [
+        "generate_repurpose_drafts.py",
+        "从 topic_plan + organized transcript 提取核心主张",
+        "单推或 thread"
+      ]
+    },
+    {
+      "id": "x_review",
+      "lane": "x_post",
+      "role": "decision",
+      "type": "human",
+      "title": "人工读一遍",
+      "x": 1140,
+      "y": 670,
+      "w": 500,
+      "h": 180,
+      "body": [
+        "没有自动质检",
+        "X 平台依赖个人语气",
+        "机器评分意义不大"
+      ]
+    },
+    {
+      "id": "x_sink",
+      "lane": "x_post",
+      "role": "artifact",
+      "type": "sink",
+      "title": "X 草稿",
+      "x": 1140,
+      "y": 870,
+      "w": 500,
+      "h": 180,
+      "body": [
+        "outbox/drafts/x/<draft-id>.md",
+        "手动复制到 X 客户端发布",
+        "当前无 API 自动推送"
+      ]
+    },
+    {
+      "id": "action_queue",
+      "lane": "deliver",
+      "role": "process",
+      "type": "script",
+      "title": "Action Queue",
+      "x": 80,
+      "y": 1340,
+      "w": 360,
+      "h": 130,
+      "body": [
+        "build_outbox_action_queue.py",
+        "auto_repair / reingest / merge_or_drop",
+        "XHS Layer 1 blocked 进入"
+      ]
+    },
+    {
+      "id": "outbox_dashboard",
+      "lane": "deliver",
+      "role": "artifact",
+      "type": "state",
+      "title": "Outbox Dashboard",
+      "x": 480,
+      "y": 1340,
+      "w": 360,
+      "h": 130,
+      "body": [
+        "outbox/dashboard.html",
+        "每平台进度条 + 评分",
+        "DBS 9 维 chip 在每张 XHS 卡"
+      ]
+    },
+    {
+      "id": "manual_review",
+      "lane": "deliver",
+      "role": "process",
+      "type": "human",
+      "title": "人工审核 / 决策",
+      "x": 880,
+      "y": 1340,
+      "w": 360,
+      "h": 130,
+      "body": [
+        "record_outbox_action_decision.py",
+        "决策：reingest / skip / merge / drop",
+        "发布前最后 gate"
+      ]
+    },
+    {
+      "id": "sent_artifact",
+      "lane": "deliver",
+      "role": "artifact",
+      "type": "output",
+      "title": "Sent",
+      "x": 1280,
+      "y": 1340,
+      "w": 360,
+      "h": 130,
+      "body": [
+        "outbox/sent/<platform>/<draft-id>/",
+        "已发布永久保留",
+        "不再触发流水线"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "douyin_source",
+      "to": "transcribe_mlx",
+      "type": "entry"
+    },
+    {
+      "from": "transcribe_mlx",
+      "to": "organize_transcript",
+      "type": "local_model"
+    },
+    {
+      "from": "organize_transcript",
+      "to": "topic_plan",
+      "type": "ai",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 1320,
+          "y": 270
+        },
+        {
+          "x": 860,
+          "y": 270
+        }
+      ]
+    },
+    {
+      "from": "topic_plan",
+      "to": "wechat_generate",
+      "type": "script",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 860,
+          "y": 420
+        },
+        {
+          "x": 260,
+          "y": 420
+        }
+      ]
+    },
+    {
+      "from": "topic_plan",
+      "to": "xhs_generate",
+      "type": "script",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 860,
+          "y": 420
+        },
+        {
+          "x": 790,
+          "y": 420
+        }
+      ]
+    },
+    {
+      "from": "topic_plan",
+      "to": "x_generate",
+      "type": "script",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 860,
+          "y": 420
+        },
+        {
+          "x": 1390,
+          "y": 420
+        }
+      ]
+    },
+    {
+      "from": "wechat_generate",
+      "to": "wechat_html",
+      "type": "ai"
+    },
+    {
+      "from": "wechat_html",
+      "to": "wechat_push",
+      "type": "script"
+    },
+    {
+      "from": "wechat_push",
+      "to": "wechat_sink",
+      "type": "script"
+    },
+    {
+      "from": "xhs_generate",
+      "to": "xhs_polish",
+      "type": "ai"
+    },
+    {
+      "from": "xhs_polish",
+      "to": "xhs_layer1",
+      "type": "ai"
+    },
+    {
+      "from": "xhs_layer1",
+      "to": "xhs_layer2",
+      "type": "script"
+    },
+    {
+      "from": "xhs_layer2",
+      "to": "xhs_render",
+      "type": "ai"
+    },
+    {
+      "from": "xhs_render",
+      "to": "xhs_sink",
+      "type": "script"
+    },
+    {
+      "from": "x_generate",
+      "to": "x_review",
+      "type": "ai"
+    },
+    {
+      "from": "x_review",
+      "to": "x_sink",
+      "type": "human"
+    },
+    {
+      "from": "xhs_layer1",
+      "to": "action_queue",
+      "type": "script",
+      "start": "left",
+      "end": "top",
+      "points": [
+        {
+          "x": 470,
+          "y": 800
+        },
+        {
+          "x": 470,
+          "y": 1290
+        },
+        {
+          "x": 260,
+          "y": 1290
+        }
+      ]
+    },
+    {
+      "from": "wechat_sink",
+      "to": "outbox_dashboard",
+      "type": "sink",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 260,
+          "y": 1300
+        },
+        {
+          "x": 660,
+          "y": 1300
+        }
+      ]
+    },
+    {
+      "from": "xhs_sink",
+      "to": "outbox_dashboard",
+      "type": "sink",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 790,
+          "y": 1300
+        },
+        {
+          "x": 660,
+          "y": 1300
+        }
+      ]
+    },
+    {
+      "from": "x_sink",
+      "to": "outbox_dashboard",
+      "type": "sink",
+      "start": "bottom",
+      "end": "top",
+      "points": [
+        {
+          "x": 1390,
+          "y": 1300
+        },
+        {
+          "x": 660,
+          "y": 1300
+        }
+      ]
+    },
+    {
+      "from": "action_queue",
+      "to": "manual_review",
+      "type": "script"
+    },
+    {
+      "from": "outbox_dashboard",
+      "to": "manual_review",
+      "type": "state"
+    },
+    {
+      "from": "manual_review",
+      "to": "sent_artifact",
+      "type": "human"
+    }
+  ]
+}

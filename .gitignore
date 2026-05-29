@@ -1,0 +1,43 @@
+# Python/runtime
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local run outputs and generated diagnostics
+.runs/
+*.log
+*.tmp
+*.temp
+.DS_Store
+
+# Local editor / agent state
+.claude/*.local.json
+
+# Secrets, credentials, cookies, and OAuth/token material
+.env
+.env.*
+secrets/
+**/secrets/
+**/*secret*
+**/*Secret*
+**/*token*
+**/*Token*
+**/*cookie*
+**/*Cookie*
+**/*oauth*
+**/*OAuth*
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+
+# External content/output stores are intentionally outside this repo.
+# Do not vendor Park-IO assets or platform account state into content-ops.
+outbox/
+park-io/
+cookies/
+tokens/

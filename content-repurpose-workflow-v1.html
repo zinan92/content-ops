@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Park-IO Content Repurpose Workflow — v1</title>
+  <style>
+    body { margin: 0; background: #f7f3ea; color: #111827; font-family: Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: 1720px; margin: 0 auto; padding: 34px 40px 48px; }
+    .top { display: flex; justify-content: space-between; gap: 28px; align-items: flex-start; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 42px; letter-spacing: 0; }
+    .sub { margin: 10px 0 0; color: #64748b; font-size: 18px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; max-width: 1050px; }
+    .pill { display: inline-flex; align-items: center; gap: 8px; border: 2px solid #d8d0c3; background: #fffdf8; border-radius: 999px; padding: 8px 12px; font-size: 15px; font-weight: 760; }
+    .pill span { display: inline-block; width: 12px; height: 12px; border-radius: 999px; }
+    .canvas { border: 2px solid #d8d0c3; border-radius: 24px; overflow: hidden; background: #fffdf8; box-shadow: 0 18px 50px rgba(31,41,51,.09); }
+    svg { display: block; width: 100%; height: auto; }
+    .notes { margin: 18px 0 0; color: #64748b; font-size: 16px; line-height: 1.7; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div>
+      <h1>Park-IO Content Repurpose Workflow V1</h1>
+      <p class="sub">抖音源视频按平台分流。小红书 path 通过 Layer 1 硬 fail + Layer 2 dbs 9 维评分双层质检。图由这个 YAML 渲染生成。</p>
+    </div>
+    <div class="legend"><span class="pill"><span style="background:#475569"></span>自动抓取入口</span>
+<span class="pill"><span style="background:#2563eb"></span>Human 输入</span>
+<span class="pill"><span style="background:#0f766e"></span>脚本 / 确定性</span>
+<span class="pill"><span style="background:#7c3aed"></span>本地模型 / MLX Whisper</span>
+<span class="pill"><span style="background:#b45309"></span>AI + system prompt</span>
+<span class="pill"><span style="background:#166534"></span>Section Sink</span>
+<span class="pill"><span style="background:#64748b"></span>状态与归档</span>
+<span class="pill"><span style="background:#0f3d38"></span>最终输出</span></div>
+  </div>
+  <div class="canvas">
+  <svg viewBox="0 0 1720 1940" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Park-IO Content Repurpose Workflow">
+    <defs>
+      <filter id="shadow" x="-8%" y="-8%" width="125%" height="125%"><feDropShadow dx="4" dy="6" stdDeviation="0" flood-color="#1f2933" flood-opacity=".10"/></filter>
+      <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="#1f2933" opacity=".10"/></pattern>
+      <marker id="arrow-script" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#0f766e" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-ai" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#b45309" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-local_model" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#7c3aed" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-human" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#2563eb" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-entry" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#475569" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-state" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#64748b" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-output" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#0f3d38" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-sink" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#166534" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-media" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#7c3aed" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-manual" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#2563eb" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="arrow-bypass" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto"><path d="M2,2 L12,7 L2,12" fill="none" stroke="#0f766e" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    </defs>
+    <rect x="0" y="0" width="1720" height="1940" fill="#fffdf8"/>
+    <rect x="0" y="0" width="1720" height="1940" fill="url(#grid)"/>
+    <rect x="70" y="80" width="1530" height="230" rx="24" fill="#ffffff" opacity=".5" stroke="#94a3b8" stroke-width="2" stroke-dasharray="10 9"/><rect x="94" y="63" width="468" height="34" rx="10" fill="#fffdf8"/><text x="108" y="87" fill="#64748b" font-size="18" font-weight="850">源采集 → 转录 → 整理 → 选题（4 平台共享）</text>
+<rect x="70" y="340" width="360" height="1330" rx="24" fill="#ffffff" opacity=".5" stroke="#94a3b8" stroke-width="2" stroke-dasharray="10 9"/><rect x="94" y="323" width="383" height="34" rx="10" fill="#fffdf8"/><text x="108" y="347" fill="#64748b" font-size="18" font-weight="850">Path 1 → 小红书图文卡（双层质检）</text>
+<rect x="460" y="340" width="360" height="1330" rx="24" fill="#ffffff" opacity=".5" stroke="#94a3b8" stroke-width="2" stroke-dasharray="10 9"/><rect x="484" y="323" width="264" height="34" rx="10" fill="#fffdf8"/><text x="498" y="347" fill="#64748b" font-size="18" font-weight="850">Path 2 → 公众号长文</text>
+<rect x="850" y="340" width="360" height="1330" rx="24" fill="#ffffff" opacity=".5" stroke="#94a3b8" stroke-width="2" stroke-dasharray="10 9"/><rect x="874" y="323" width="400" height="34" rx="10" fill="#fffdf8"/><text x="888" y="347" fill="#64748b" font-size="18" font-weight="850">Path 3 → X 推文 / Thread</text>
+<rect x="1240" y="340" width="360" height="1330" rx="24" fill="#ffffff" opacity=".5" stroke="#94a3b8" stroke-width="2" stroke-dasharray="10 9"/><rect x="1264" y="323" width="536" height="34" rx="10" fill="#fffdf8"/><text x="1278" y="347" fill="#64748b" font-size="18" font-weight="850">Path 4 → 视频号 / B站 / YouTube 迁移</text>
+<rect x="70" y="1700" width="1530" height="230" rx="24" fill="#ffffff" opacity=".5" stroke="#94a3b8" stroke-width="2" stroke-dasharray="10 9"/><rect x="94" y="1683" width="162" height="34" rx="10" fill="#fffdf8"/><text x="108" y="1707" fill="#64748b" font-size="18" font-weight="850">状态、归档与发布</text>
+    <path d="M 440.0 212.5 C 455.0 212.5, 455.0 212.5, 470.0 212.5" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)" opacity="0.92"/>
+<path d="M 820.0 212.5 C 835.0 212.5, 835.0 212.5, 850.0 212.5" fill="none" stroke="#7c3aed" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-local_model)" opacity="0.92"/>
+<path d="M 1200.0 212.5 C 1215.0 212.5, 1215.0 212.5, 1230.0 212.5" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-ai)" opacity="0.92"/>
+<path d="M 1230.0 212.5 C 813.0 212.5, 813.0 456.0, 396.0 456.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 1230.0 212.5 C 1008.0 212.5, 1008.0 456.0, 786.0 456.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 1230.0 212.5 C 1203.0 212.5, 1203.0 456.0, 1176.0 456.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 440.0 212.5 C 857.0 212.5, 857.0 456.0, 1274.0 456.0" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)" opacity="0.92"/>
+<path d="M 440.0 212.5 C 857.0 212.5, 857.0 638.0, 1274.0 638.0" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)" opacity="0.92"/>
+<path d="M 440.0 212.5 C 857.0 212.5, 857.0 820.0, 1274.0 820.0" fill="none" stroke="#475569" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-entry)" opacity="0.92"/>
+<path d="M 250.0 530.0 C 250.0 547.0, 250.0 547.0, 250.0 564.0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-ai)" opacity="0.92"/>
+<path d="M 250.0 712.0 C 250.0 729.0, 250.0 729.0, 250.0 746.0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-ai)" opacity="0.92"/>
+<path d="M 250.0 894.0 C 250.0 911.0, 250.0 911.0, 250.0 928.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 250.0 1076.0 C 250.0 1093.0, 250.0 1093.0, 250.0 1110.0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-ai)" opacity="0.92"/>
+<path d="M 250.0 1258.0 C 250.0 1275.0, 250.0 1275.0, 250.0 1292.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 640.0 530.0 C 640.0 547.0, 640.0 547.0, 640.0 564.0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-ai)" opacity="0.92"/>
+<path d="M 640.0 712.0 C 640.0 729.0, 640.0 729.0, 640.0 746.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 640.0 894.0 C 640.0 1002.0, 640.0 1002.0, 640.0 1110.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 640.0 894.0 C 640.0 911.0, 640.0 911.0, 640.0 928.0" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-human)" opacity="0.92"/>
+<path d="M 640.0 1076.0 C 640.0 1093.0, 640.0 1093.0, 640.0 1110.0" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-human)" opacity="0.92"/>
+<path d="M 1030.0 530.0 C 1030.0 547.0, 1030.0 547.0, 1030.0 564.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 1030.0 712.0 C 1030.0 729.0, 1030.0 729.0, 1030.0 746.0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-ai)" opacity="0.92"/>
+<path d="M 1030.0 894.0 C 1030.0 911.0, 1030.0 911.0, 1030.0 928.0" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-human)" opacity="0.92"/>
+<path d="M 1420.0 530.0 C 1420.0 729.0, 1420.0 729.0, 1420.0 928.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 1420.0 712.0 C 1420.0 820.0, 1420.0 820.0, 1420.0 928.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 1420.0 894.0 C 1420.0 911.0, 1420.0 911.0, 1420.0 928.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 250.0 1440.0 L 251.0 1685.0 L 530.0 1685.0 L 530.0 1730.0" fill="none" stroke="#166534" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-sink)" opacity="0.92"/>
+<path d="M 640.0 1258.0 L 641.0 1685.0 L 530.0 1685.0 L 530.0 1730.0" fill="none" stroke="#166534" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-sink)" opacity="0.92"/>
+<path d="M 1030.0 1076.0 L 1031.0 1685.0 L 530.0 1685.0 L 530.0 1730.0" fill="none" stroke="#166534" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-sink)" opacity="0.92"/>
+<path d="M 1420.0 1076.0 L 1421.0 1685.0 L 530.0 1685.0 L 530.0 1730.0" fill="none" stroke="#166534" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-sink)" opacity="0.92"/>
+<path d="M 104.0 820.0 L 50.0 1715.0 L 230.0 1715.0 L 230.0 1730.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 370.0 1815.0 C 530.0 1815.0, 530.0 1815.0, 690.0 1815.0" fill="none" stroke="#0f766e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-script)" opacity="0.92"/>
+<path d="M 670.0 1815.0 C 680.0 1815.0, 680.0 1815.0, 690.0 1815.0" fill="none" stroke="#64748b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-state)" opacity="0.92"/>
+<path d="M 970.0 1815.0 C 980.0 1815.0, 980.0 1815.0, 990.0 1815.0" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-human)" opacity="0.92"/>
+<path d="M 670.0 1815.0 C 980.0 1815.0, 980.0 1815.0, 1290.0 1815.0" fill="none" stroke="#64748b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-state)" opacity="0.92"/>
+    <g id="node-douyin_source">
+<rect x="90" y="130" width="350" height="165" rx="18" fill="#f1f5f9" stroke="#475569" stroke-width="3" filter="url(#shadow)"/>
+<text x="110" y="158" fill="#475569" font-size="13" font-weight="850" letter-spacing="1">自动抓取入口</text>
+<text x="110" y="192" fill="#111827" font-size="24" font-weight="850">抖音源视频入口</text>
+<text x="110" y="224" fill="#64748b" font-size="16" font-weight="520">save_douyin_sent.py 从 URL</text>
+<text x="110" y="246" fill="#64748b" font-size="16" font-weight="520">拉取</text>
+<text x="110" y="268" fill="#64748b" font-size="16" font-weight="520">outbox/sent/douyin/YYYY-</text>
+</g>
+<g id="node-transcribe_mlx">
+<rect x="470" y="130" width="350" height="165" rx="18" fill="#f5f3ff" stroke="#7c3aed" stroke-width="3" filter="url(#shadow)"/>
+<text x="490" y="158" fill="#7c3aed" font-size="13" font-weight="850" letter-spacing="1">本地模型 / MLX Whisper</text>
+<text x="490" y="192" fill="#111827" font-size="24" font-weight="850">MLX Whisper 转录</text>
+<text x="490" y="224" fill="#64748b" font-size="16" font-weight="520">transcribe_douyin_mlx.py</text>
+<text x="490" y="246" fill="#64748b" font-size="16" font-weight="520">本地推理无 API 调用</text>
+<text x="490" y="268" fill="#64748b" font-size="16" font-weight="520">输出 transcript/raw.json +</text>
+</g>
+<g id="node-organize_transcript">
+<rect x="850" y="130" width="350" height="165" rx="18" fill="#fff7ed" stroke="#b45309" stroke-width="3" filter="url(#shadow)"/>
+<text x="870" y="158" fill="#b45309" font-size="13" font-weight="850" letter-spacing="1">AI + system prompt</text>
+<text x="870" y="192" fill="#111827" font-size="24" font-weight="850">整理转录</text>
+<text x="870" y="224" fill="#64748b" font-size="16" font-weight="520">organize_douyin_transcripts.py</text>
+<text x="870" y="246" fill="#64748b" font-size="16" font-weight="520">口播 raw → 可读 organized</text>
+<text x="870" y="268" fill="#64748b" font-size="16" font-weight="520">是所有平台改写的输入</text>
+</g>
+<g id="node-topic_plan">
+<rect x="1230" y="130" width="350" height="165" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="1250" y="158" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="1250" y="192" fill="#111827" font-size="24" font-weight="850">确定性选题切分</text>
+<text x="1250" y="224" fill="#64748b" font-size="16" font-weight="520">build_dashboard.py 写</text>
+<text x="1250" y="246" fill="#64748b" font-size="16" font-weight="520">topic-plans.json</text>
+<text x="1250" y="268" fill="#64748b" font-size="16" font-weight="520">一个 source 切多个 main /</text>
+</g>
+<g id="node-xhs_generate">
+<rect x="104" y="382" width="292" height="148" rx="18" fill="#fff7ed" stroke="#b45309" stroke-width="3" filter="url(#shadow)"/>
+<text x="124" y="410" fill="#b45309" font-size="13" font-weight="850" letter-spacing="1">AI + system prompt</text>
+<text x="124" y="444" fill="#111827" font-size="24" font-weight="850">生成 XHS 初稿</text>
+<text x="124" y="476" fill="#64748b" font-size="16" font-weight="520">generate_xiaohongshu_from_content_package.py</text>
+<text x="124" y="498" fill="#64748b" font-size="16" font-weight="520">一个 main topic → 一个</text>
+</g>
+<g id="node-xhs_polish">
+<rect x="104" y="564" width="292" height="148" rx="18" fill="#fff7ed" stroke="#b45309" stroke-width="3" filter="url(#shadow)"/>
+<text x="124" y="592" fill="#b45309" font-size="13" font-weight="850" letter-spacing="1">AI + system prompt</text>
+<text x="124" y="626" fill="#111827" font-size="24" font-weight="850">Polish 改写</text>
+<text x="124" y="658" fill="#64748b" font-size="16" font-weight="520">polish_xiaohongshu_drafts.py</text>
+<text x="124" y="680" fill="#64748b" font-size="16" font-weight="520">template_kind 映射 +</text>
+</g>
+<g id="node-xhs_layer1">
+<rect x="104" y="746" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="124" y="774" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="124" y="808" fill="#111827" font-size="24" font-weight="850">Layer 1 硬 fail</text>
+<text x="124" y="840" fill="#64748b" font-size="16" font-weight="520">quality_xiaohongshu_drafts.py（瘦身后</text>
+<text x="124" y="862" fill="#64748b" font-size="16" font-weight="520">310 行）</text>
+</g>
+<g id="node-xhs_layer2">
+<rect x="104" y="928" width="292" height="148" rx="18" fill="#fff7ed" stroke="#b45309" stroke-width="3" filter="url(#shadow)"/>
+<text x="124" y="956" fill="#b45309" font-size="13" font-weight="850" letter-spacing="1">AI + system prompt</text>
+<text x="124" y="990" fill="#111827" font-size="24" font-weight="850">Layer 2 dbs 9 维评分</text>
+<text x="124" y="1022" fill="#64748b" font-size="16" font-weight="520">dbs_xhs_review.py（新）</text>
+<text x="124" y="1044" fill="#64748b" font-size="16" font-weight="520">claude -p 子进程 +</text>
+</g>
+<g id="node-xhs_render">
+<rect x="104" y="1110" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="124" y="1138" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="124" y="1172" fill="#111827" font-size="24" font-weight="850">渲染图文卡</text>
+<text x="124" y="1204" fill="#64748b" font-size="16" font-weight="520">render_xiaohongshu_cards.py</text>
+<text x="124" y="1226" fill="#64748b" font-size="16" font-weight="520">HTML/CSS + Chrome</text>
+</g>
+<g id="node-xhs_sink">
+<rect x="104" y="1292" width="292" height="148" rx="18" fill="#f0fdf4" stroke="#166534" stroke-width="3" filter="url(#shadow)"/>
+<text x="124" y="1320" fill="#166534" font-size="13" font-weight="850" letter-spacing="1">Section Sink</text>
+<text x="124" y="1354" fill="#111827" font-size="24" font-weight="850">小红书草稿</text>
+<text x="124" y="1386" fill="#64748b" font-size="16" font-weight="520">outbox/drafts/xiaohongshu/&lt;draft-</text>
+<text x="124" y="1408" fill="#64748b" font-size="16" font-weight="520">id&gt;/</text>
+</g>
+<g id="node-wechat_generate">
+<rect x="494" y="382" width="292" height="148" rx="18" fill="#fff7ed" stroke="#b45309" stroke-width="3" filter="url(#shadow)"/>
+<text x="514" y="410" fill="#b45309" font-size="13" font-weight="850" letter-spacing="1">AI + system prompt</text>
+<text x="514" y="444" fill="#111827" font-size="24" font-weight="850">生成公众号长文</text>
+<text x="514" y="476" fill="#64748b" font-size="16" font-weight="520">generate_wechat_mp_article.py</text>
+<text x="514" y="498" fill="#64748b" font-size="16" font-weight="520">中文长文 + 配图</text>
+</g>
+<g id="node-wechat_html">
+<rect x="494" y="564" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="514" y="592" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="514" y="626" fill="#111827" font-size="24" font-weight="850">生成双 HTML</text>
+<text x="514" y="658" fill="#64748b" font-size="16" font-weight="520">&lt;draft&gt;.html</text>
+<text x="514" y="680" fill="#64748b" font-size="16" font-weight="520">dashboard 预览</text>
+</g>
+<g id="node-wechat_push">
+<rect x="494" y="746" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="514" y="774" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="514" y="808" fill="#111827" font-size="24" font-weight="850">API 推送草稿箱</text>
+<text x="514" y="840" fill="#64748b" font-size="16" font-weight="520">/api/actions/push-</text>
+<text x="514" y="862" fill="#64748b" font-size="16" font-weight="520">draft</text>
+</g>
+<g id="node-wechat_docx_fallback">
+<rect x="494" y="928" width="292" height="148" rx="18" fill="#eff6ff" stroke="#2563eb" stroke-width="3" filter="url(#shadow)"/>
+<text x="514" y="956" fill="#2563eb" font-size="13" font-weight="850" letter-spacing="1">Human 输入</text>
+<text x="514" y="990" fill="#111827" font-size="24" font-weight="850">DOCX 手动兜底</text>
+<text x="514" y="1022" fill="#64748b" font-size="16" font-weight="520">build_wechat_mp_docx.py</text>
+<text x="514" y="1044" fill="#64748b" font-size="16" font-weight="520">公众号后台文档导入</text>
+</g>
+<g id="node-wechat_sink">
+<rect x="494" y="1110" width="292" height="148" rx="18" fill="#f0fdf4" stroke="#166534" stroke-width="3" filter="url(#shadow)"/>
+<text x="514" y="1138" fill="#166534" font-size="13" font-weight="850" letter-spacing="1">Section Sink</text>
+<text x="514" y="1172" fill="#111827" font-size="24" font-weight="850">公众号草稿</text>
+<text x="514" y="1204" fill="#64748b" font-size="16" font-weight="520">公众号草稿箱</text>
+<text x="514" y="1226" fill="#64748b" font-size="16" font-weight="520">人工审首图 / 标题 / 完整性</text>
+</g>
+<g id="node-x_extract_seeds">
+<rect x="884" y="382" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="904" y="410" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="904" y="444" fill="#111827" font-size="24" font-weight="850">抽 Thread 候选</text>
+<text x="904" y="476" fill="#64748b" font-size="16" font-weight="520">从 organized</text>
+<text x="904" y="498" fill="#64748b" font-size="16" font-weight="520">transcript 取主张句</text>
+</g>
+<g id="node-x_generate">
+<rect x="884" y="564" width="292" height="148" rx="18" fill="#fff7ed" stroke="#b45309" stroke-width="3" filter="url(#shadow)"/>
+<text x="904" y="592" fill="#b45309" font-size="13" font-weight="850" letter-spacing="1">AI + system prompt</text>
+<text x="904" y="626" fill="#111827" font-size="24" font-weight="850">生成推文 / Thread</text>
+<text x="904" y="658" fill="#64748b" font-size="16" font-weight="520">generate_repurpose_drafts.py</text>
+<text x="904" y="680" fill="#64748b" font-size="16" font-weight="520">单推 或 thread</text>
+</g>
+<g id="node-x_review">
+<rect x="884" y="746" width="292" height="148" rx="18" fill="#eff6ff" stroke="#2563eb" stroke-width="3" filter="url(#shadow)"/>
+<text x="904" y="774" fill="#2563eb" font-size="13" font-weight="850" letter-spacing="1">Human 输入</text>
+<text x="904" y="808" fill="#111827" font-size="24" font-weight="850">人工读一遍</text>
+<text x="904" y="840" fill="#64748b" font-size="16" font-weight="520">没有自动质检</text>
+<text x="904" y="862" fill="#64748b" font-size="16" font-weight="520">X 平台依赖个人语气；机器评分意义不大</text>
+</g>
+<g id="node-x_sink">
+<rect x="884" y="928" width="292" height="148" rx="18" fill="#f0fdf4" stroke="#166534" stroke-width="3" filter="url(#shadow)"/>
+<text x="904" y="956" fill="#166534" font-size="13" font-weight="850" letter-spacing="1">Section Sink</text>
+<text x="904" y="990" fill="#111827" font-size="24" font-weight="850">X 草稿</text>
+<text x="904" y="1022" fill="#64748b" font-size="16" font-weight="520">outbox/drafts/x/&lt;draft-</text>
+<text x="904" y="1044" fill="#64748b" font-size="16" font-weight="520">id&gt;.md</text>
+</g>
+<g id="node-bilibili_upload">
+<rect x="1274" y="382" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="1294" y="410" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="1294" y="444" fill="#111827" font-size="24" font-weight="850">B 站上传</text>
+<text x="1294" y="476" fill="#64748b" font-size="16" font-weight="520">bilibili_web_upload.py</text>
+<text x="1294" y="498" fill="#64748b" font-size="16" font-weight="520">视频 + 封面 + 简介</text>
+</g>
+<g id="node-youtube_upload">
+<rect x="1274" y="564" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="1294" y="592" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="1294" y="626" fill="#111827" font-size="24" font-weight="850">YouTube 上传</text>
+<text x="1294" y="658" fill="#64748b" font-size="16" font-weight="520">youtube_channel.py</text>
+<text x="1294" y="680" fill="#64748b" font-size="16" font-weight="520">同抖音内容直接搬</text>
+</g>
+<g id="node-migration_evidence">
+<rect x="1274" y="746" width="292" height="148" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="1294" y="774" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="1294" y="808" fill="#111827" font-size="24" font-weight="850">迁移取证截图</text>
+<text x="1294" y="840" fill="#64748b" font-size="16" font-weight="520">capture_video_migration_evidence.py</text>
+<text x="1294" y="862" fill="#64748b" font-size="16" font-weight="520">已迁移视频的链接 + 截图归档</text>
+</g>
+<g id="node-migration_sink">
+<rect x="1274" y="928" width="292" height="148" rx="18" fill="#f0fdf4" stroke="#166534" stroke-width="3" filter="url(#shadow)"/>
+<text x="1294" y="956" fill="#166534" font-size="13" font-weight="850" letter-spacing="1">Section Sink</text>
+<text x="1294" y="990" fill="#111827" font-size="24" font-weight="850">迁移记录</text>
+<text x="1294" y="1022" fill="#64748b" font-size="16" font-weight="520">migration-status 表</text>
+<text x="1294" y="1044" fill="#64748b" font-size="16" font-weight="520">dashboard 上紧凑展示</text>
+</g>
+<g id="node-action_queue">
+<rect x="90" y="1730" width="280" height="170" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="110" y="1758" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="110" y="1792" fill="#111827" font-size="24" font-weight="850">Action Queue</text>
+<text x="110" y="1824" fill="#64748b" font-size="16" font-weight="520">build_outbox_action_queue.py</text>
+<text x="110" y="1846" fill="#64748b" font-size="16" font-weight="520">三类：auto_repair /</text>
+<text x="110" y="1868" fill="#64748b" font-size="16" font-weight="520">reingest /</text>
+</g>
+<g id="node-outbox_dashboard">
+<rect x="390" y="1730" width="280" height="170" rx="18" fill="#f8fafc" stroke="#64748b" stroke-width="3" filter="url(#shadow)"/>
+<text x="410" y="1758" fill="#64748b" font-size="13" font-weight="850" letter-spacing="1">状态与归档</text>
+<text x="410" y="1792" fill="#111827" font-size="24" font-weight="850">Outbox Dashboard</text>
+<text x="410" y="1824" fill="#64748b" font-size="16" font-weight="520">outbox/dashboard.html</text>
+<text x="410" y="1846" fill="#64748b" font-size="16" font-weight="520">每平台进度条 + 草稿评分</text>
+<text x="410" y="1868" fill="#64748b" font-size="16" font-weight="520">DBS 9 维 chip 在每张 XHS</text>
+</g>
+<g id="node-manual_review">
+<rect x="690" y="1730" width="280" height="170" rx="18" fill="#eff6ff" stroke="#2563eb" stroke-width="3" filter="url(#shadow)"/>
+<text x="710" y="1758" fill="#2563eb" font-size="13" font-weight="850" letter-spacing="1">Human 输入</text>
+<text x="710" y="1792" fill="#111827" font-size="24" font-weight="850">人工审核 / 决策</text>
+<text x="710" y="1824" fill="#64748b" font-size="16" font-weight="520">record_outbox_action_decision.py</text>
+<text x="710" y="1846" fill="#64748b" font-size="16" font-weight="520">决策：reingest / skip /</text>
+<text x="710" y="1868" fill="#64748b" font-size="16" font-weight="520">merge / drop</text>
+</g>
+<g id="node-sent_artifact">
+<rect x="990" y="1730" width="280" height="170" rx="18" fill="#ecfdf5" stroke="#0f3d38" stroke-width="3" filter="url(#shadow)"/>
+<text x="1010" y="1758" fill="#0f3d38" font-size="13" font-weight="850" letter-spacing="1">最终输出</text>
+<text x="1010" y="1792" fill="#111827" font-size="24" font-weight="850">Sent Artifact</text>
+<text x="1010" y="1824" fill="#64748b" font-size="16" font-weight="520">outbox/sent/&lt;platform&gt;/&lt;draft-</text>
+<text x="1010" y="1846" fill="#64748b" font-size="16" font-weight="520">id&gt;/</text>
+<text x="1010" y="1868" fill="#64748b" font-size="16" font-weight="520">已发布永久保留</text>
+</g>
+<g id="node-outbox_doctor">
+<rect x="1290" y="1730" width="280" height="170" rx="18" fill="#e6fcf5" stroke="#0f766e" stroke-width="3" filter="url(#shadow)"/>
+<text x="1310" y="1758" fill="#0f766e" font-size="13" font-weight="850" letter-spacing="1">脚本 / 确定性</text>
+<text x="1310" y="1792" fill="#111827" font-size="24" font-weight="850">Outbox Doctor</text>
+<text x="1310" y="1824" fill="#64748b" font-size="16" font-weight="520">outbox_doctor.py</text>
+<text x="1310" y="1846" fill="#64748b" font-size="16" font-weight="520">每日健康检查</text>
+<text x="1310" y="1868" fill="#64748b" font-size="16" font-weight="520">不改稿不发布</text>
+</g>
+  </svg>
+  </div>
+  <ul class="notes"><li>Source ingest 共享：4 个平台都从同一份 organized transcript + topic_plan 出发，不重复抓取。</li><li>小红书是最成熟的 path：Layer 1（quality_xiaohongshu_drafts.py）做字符串硬 fail，Layer 2（dbs_xhs_review.py）用 dbs-content 风格做 9 维 LLM 评分（claude -p 子进程 + Sonnet，$0.18/篇）。</li><li>公众号 API 偶发 40164（IP 未白名单），DOCX fallback 是手工兜底路径，不是常规路径。</li><li>视频号 / B站 / YouTube 当前是&quot;已迁移即归档&quot;，内容不改写。</li><li>所有平台 sink 都进 outbox dashboard；action queue 处理 Layer 1 blocked；manual review 是发布前最后人工 gate。</li></ul>
+</main>
+</body>
+</html>

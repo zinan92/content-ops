@@ -1,0 +1,60 @@
+{
+  "platforms": [
+    {
+      "id": "douyin",
+      "label": "抖音",
+      "role": "primary_source",
+      "publish_mode": "source",
+      "target_ratio_per_asset": 1
+    },
+    {
+      "id": "xiaohongshu",
+      "label": "小红书",
+      "role": "distribution",
+      "publish_mode": "assisted_or_direct",
+      "target_ratio_per_asset": 3
+    },
+    {
+      "id": "wechat_mp",
+      "label": "公众号",
+      "role": "distribution",
+      "publish_mode": "draft_then_manual_confirm",
+      "target_ratio_per_asset": 0.3
+    },
+    {
+      "id": "wechat_channels",
+      "label": "视频号",
+      "role": "distribution",
+      "publish_mode": "assisted",
+      "target_ratio_per_asset": 1
+    },
+    {
+      "id": "x",
+      "label": "X",
+      "role": "distribution",
+      "publish_mode": "direct_candidate",
+      "target_ratio_per_asset": 1
+    },
+    {
+      "id": "youtube",
+      "label": "YouTube",
+      "role": "distribution",
+      "publish_mode": "direct_candidate",
+      "target_ratio_per_asset": 0.5
+    },
+    {
+      "id": "bilibili",
+      "label": "Bilibili",
+      "role": "distribution",
+      "publish_mode": "direct_candidate",
+      "target_ratio_per_asset": 0.5
+    },
+    {
+      "id": "zhihu",
+      "label": "知乎",
+      "role": "distribution",
+      "publish_mode": "assisted",
+      "target_ratio_per_asset": 0.2
+    }
+  ]
+}
