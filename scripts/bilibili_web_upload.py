@@ -181,6 +181,11 @@ async def upload(args: argparse.Namespace) -> dict[str, Any]:
                     "message": "Bilibili 网页投稿登录态失效，请在 dashboard 里重新登录 Bilibili。",
                 }
             file_inputs = page.locator('input[type="file"]')
+            # 投稿页是单页应用，上传控件要 4–5 秒才渲染出来；固定等 3 秒会误报「没有上传控件」。
+            try:
+                await file_inputs.first.wait_for(state="attached", timeout=args.page_timeout * 1000)
+            except PlaywrightTimeoutError:
+                pass
             if await file_inputs.count() == 0:
                 text = (await page_text(page))[:1200]
                 return {"ok": False, "status": "upload_input_missing", "url": page.url, "message": "Bilibili 投稿页没有找到上传控件。", "page_excerpt": text}
