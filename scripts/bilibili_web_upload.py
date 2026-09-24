@@ -128,6 +128,30 @@ async def verify(args: argparse.Namespace) -> dict[str, Any]:
             await browser.close()
 
 
+async def set_cover(page, cover: Path) -> dict[str, Any] | None:
+    """打开「封面制作」，勾「双比例同步改动」（4:3 的图同时用在 16:9），上传，点完成。
+
+    返回 None 表示设好了；否则是说明哪一步没成的结果，调用方在投稿前停下。
+    """
+    await page.locator(".cover-empty, .cover-main .cover-slot").first.click()
+    dialog = page.locator(".bcc-dialog").filter(has_text="封面制作").first
+    await dialog.wait_for(state="visible", timeout=15000)
+    sync = dialog.locator(".sync.ratio_4_3 .sync-checkbox").first
+    if await sync.count() and "bcc-checkbox-checked" not in (await sync.get_attribute("class") or ""):
+        await sync.click()
+        await page.wait_for_timeout(500)
+    await dialog.locator('input[type=file][accept*="image"]').first.set_input_files(str(cover))
+    await page.wait_for_timeout(5000)
+    await dialog.get_by_text("完成", exact=True).last.click()
+    await page.wait_for_timeout(3000)
+    has_image = await page.evaluate(
+        "() => { const img = document.querySelector('.cover-main .cover-img'); return !!img && /url\\(/.test(img.style.backgroundImage || ''); }"
+    )
+    if not has_image:
+        return {"ok": False, "status": "cover_not_set", "message": "封面没设上，没有投稿。可以重试，或者在 B 站后台手动投稿。"}
+    return None
+
+
 async def upload(args: argparse.Namespace) -> dict[str, Any]:
     account_file = Path(args.account_file).expanduser()
     video = Path(args.video).expanduser()
@@ -135,6 +159,9 @@ async def upload(args: argparse.Namespace) -> dict[str, Any]:
         return {"ok": False, "status": "cookie_missing", "account_file": str(account_file), "message": "缺少 Bilibili cookie 文件。"}
     if not video.exists():
         return {"ok": False, "status": "video_missing", "video": str(video), "message": "缺少本地视频文件。"}
+    cover = Path(args.cover).expanduser() if getattr(args, "cover", None) else None
+    if cover is not None and (not cover.is_file() or cover.suffix.lower() not in (".jpg", ".jpeg", ".png")):
+        return {"ok": False, "status": "cover_missing", "cover": str(cover), "message": "封面要是本地的 jpg 或 png。"}
     cookies = load_biliup_cookies(account_file)
     tags = [tag.strip().lstrip("#") for tag in (args.tags or "").split(",") if tag.strip()]
     async with async_playwright() as playwright:
@@ -160,6 +187,10 @@ async def upload(args: argparse.Namespace) -> dict[str, Any]:
             await file_inputs.first.set_input_files(str(video))
             await page.wait_for_selector('input[placeholder="请输入稿件标题"]', timeout=args.form_timeout * 1000)
             await page.locator('input[placeholder="请输入稿件标题"]').first.fill(args.title[:80])
+            if cover is not None:
+                failed = await set_cover(page, cover)
+                if failed:
+                    return failed
 
             declaration = page.locator('input[placeholder="请选择符合您视频内容的创作声明"]').first
             if await declaration.count():
@@ -277,6 +308,7 @@ def main() -> None:
     upload_parser.add_argument("--title", required=True)
     upload_parser.add_argument("--description", default="")
     upload_parser.add_argument("--tags", default="")
+    upload_parser.add_argument("--cover", default="", help="横版封面 jpg/png；同一张图同时用在 4:3 和 16:9")
     upload_parser.add_argument("--upload-timeout", type=int, default=900)
     upload_parser.add_argument("--form-timeout", type=int, default=120)
 
