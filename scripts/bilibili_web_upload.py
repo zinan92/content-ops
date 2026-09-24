@@ -97,6 +97,25 @@ async def check(args: argparse.Namespace) -> dict[str, Any]:
             await browser.close()
 
 
+ARCHIVES_API = "https://member.bilibili.com/x/web/archives?status=is_pubing%2Cpubed%2Cnot_pubed&pn=1&ps=20"
+
+
+async def find_bvid(context, title: str) -> str | None:
+    """稿件列表接口按标题找 BV 号。投完就有，审核中也有；链接等审核通过才能打开。"""
+    if not title:
+        return None
+    try:
+        response = await context.request.get(ARCHIVES_API)
+        data = await response.json()
+    except Exception:  # noqa: BLE001 - 找不到链接不影响投稿结果
+        return None
+    for item in ((data or {}).get("data") or {}).get("arc_audits") or []:
+        archive = item.get("Archive") or {}
+        if str(archive.get("title") or "").strip() == title and archive.get("bvid"):
+            return str(archive["bvid"])
+    return None
+
+
 async def verify(args: argparse.Namespace) -> dict[str, Any]:
     account_file = Path(args.account_file).expanduser()
     cookies = load_biliup_cookies(account_file)
@@ -111,6 +130,7 @@ async def verify(args: argparse.Namespace) -> dict[str, Any]:
             text = await page_text(page)
             title = str(args.title or "").strip()
             found = bool(title and title in text)
+            bvid = await find_bvid(context, title)
             status_fragments = []
             for marker in ["转码中", "审核中", "已通过", "稿件投递成功", "未通过"]:
                 if marker in text:
@@ -122,6 +142,8 @@ async def verify(args: argparse.Namespace) -> dict[str, Any]:
                 "url": page.url,
                 "platform_url": MANAGER_URL,
                 "review_status": " / ".join(status_fragments[:3]) if status_fragments else "",
+                "bvid": bvid,
+                "video_url": f"https://www.bilibili.com/video/{bvid}" if bvid else None,
                 "message": "Bilibili 稿件管理页已找到该标题。" if found else "Bilibili 稿件管理页没有找到该标题，请检查是否提交成功。",
             }
         finally:
@@ -286,6 +308,8 @@ async def upload(args: argparse.Namespace) -> dict[str, Any]:
                 "title": args.title,
                 "video": str(video),
                 "platform_url": MANAGER_URL,
+                "url": verify_result.get("video_url"),
+                "bvid": verify_result.get("bvid"),
                 "verification": verify_result,
                 "message": "已提交 Bilibili，当前进入转码/审核流程。" if ok else "Bilibili 页面提示已投递，但稿件管理页暂未验证到标题。",
                 "submitted_at": datetime.now().isoformat(timespec="seconds"),
