@@ -17,6 +17,9 @@ DEFAULT_CLIENT_SECRET_CANDIDATES = [
 ]
 DEFAULT_TOKEN = ROOT / ".config/park/youtube-token.json"
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# 9/25：内容工作台每天读自己视频的播放量算触达，授权时多要一个只读权限。
+READ_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+AUTH_SCOPES = [*SCOPES, READ_SCOPE]
 GCLOUD_ADC_CANDIDATES = [
     ROOT / ".config/gcloud/application_default_credentials.json",
     ROOT / ".config/gcloud/legacy_credentials/zinan92@hotmail.com/adc.json",
@@ -143,7 +146,8 @@ def load_credentials(token_file: Path):
             "token_file": str(token_file),
             "message": "没有 YouTube OAuth token；先运行 auth。",
         }
-    creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+    # 按 token 自己记着的权限加载：传 SCOPES 会让刷新出来的 token 只剩上传权限。
+    creds = Credentials.from_authorized_user_file(str(token_file))
     refreshed = False
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
@@ -207,7 +211,7 @@ def auth(args: argparse.Namespace) -> dict[str, Any]:
             "message": "缺 Google OAuth desktop client JSON；请从 Google Cloud Console 下载 OAuth client 后放到候选路径。",
         }
     token_file = token_path(args.token)
-    flow = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(str(secret), AUTH_SCOPES)
     creds = flow.run_local_server(host="127.0.0.1", port=args.port, open_browser=True)
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(creds.to_json(), encoding="utf-8")
@@ -217,8 +221,43 @@ def auth(args: argparse.Namespace) -> dict[str, Any]:
         "status": "token_saved",
         "client_secret": str(secret),
         "token_file": str(token_file),
-        "scopes": SCOPES,
+        "scopes": AUTH_SCOPES,
+        "message": "YouTube 授权好了，可以关掉浏览器那一页。",
     }
+
+
+def stats(args: argparse.Namespace) -> dict[str, Any]:
+    """自己频道最近的视频和播放量（只读）。"""
+    deps = dependency_error()
+    if deps:
+        return deps
+    creds, status = load_credentials(token_path(args.token))
+    if not creds:
+        return status
+    if READ_SCOPE not in (creds.scopes or []):
+        return {"ok": False, "status": "needs_reauth", "message": "YouTube 授权里还没有「查看」权限，重新授权一次（auth）。"}
+    from googleapiclient.discovery import build
+
+    youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    channels = youtube.channels().list(part="contentDetails", mine=True).execute().get("items") or []
+    if not channels:
+        return {"ok": True, "items": []}
+    uploads = channels[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    ids: list[str] = []
+    page = None
+    while len(ids) < args.limit:
+        res = youtube.playlistItems().list(part="contentDetails", playlistId=uploads, maxResults=50, pageToken=page).execute()
+        ids += [i["contentDetails"]["videoId"] for i in res.get("items") or []]
+        page = res.get("nextPageToken")
+        if not page:
+            break
+    items = []
+    for start in range(0, min(len(ids), args.limit), 50):
+        res = youtube.videos().list(part="snippet,statistics", id=",".join(ids[start:start + 50])).execute()
+        for v in res.get("items") or []:
+            items.append({"id": v["id"], "title": v["snippet"].get("title", ""), "publishedAt": v["snippet"].get("publishedAt"),
+                          "views": int((v.get("statistics") or {}).get("viewCount") or 0)})
+    return {"ok": True, "items": items}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -305,6 +344,9 @@ def main() -> None:
     auth_parser = sub.add_parser("auth", help="Run local browser OAuth and save token.")
     auth_parser.add_argument("--port", type=int, default=8095)
 
+    stats_parser = sub.add_parser("stats", help="List my recent videos with view counts (read-only).")
+    stats_parser.add_argument("--limit", type=int, default=200)
+
     upload_parser = sub.add_parser("upload", help="Upload one video.")
     upload_parser.add_argument("--video", required=True)
     upload_parser.add_argument("--draft-json", default="")
@@ -329,6 +371,8 @@ def main() -> None:
         emit(check(args))
     if args.command == "auth":
         emit(auth(args))
+    if args.command == "stats":
+        emit(stats(args))
     if args.command == "upload":
         emit(upload(args))
     if args.command == "upload-private":
