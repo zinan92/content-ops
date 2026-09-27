@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 import json
 import os
 import sys
@@ -309,11 +310,21 @@ def upload(args: argparse.Namespace) -> dict[str, Any]:
             "selfDeclaredMadeForKids": False,
         },
     }
-    media = MediaFileUpload(str(video), chunksize=-1, resumable=True)
+    # 分块上传：一整块传 2 GB，网络断一下就全失败（9/27 BrokenPipe）。每块 8 MB，
+    # 断了只重传那一块，最多连续重试 8 次，间隔逐步拉长。
+    media = MediaFileUpload(str(video), chunksize=8 * 1024 * 1024, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
+    failures = 0
     while response is None:
-        _status, response = request.next_chunk()
+        try:
+            _status, response = request.next_chunk(num_retries=3)
+            failures = 0
+        except (OSError, ConnectionError, TimeoutError) as exc:  # BrokenPipe、SSL EOF、超时
+            failures += 1
+            if failures > 8:
+                raise RuntimeError(f"YouTube 上传连续 {failures} 次断线，停了：{exc}") from exc
+            time.sleep(min(60, 2 ** failures))
     video_id = response.get("id")
     return {
         "ok": True,
