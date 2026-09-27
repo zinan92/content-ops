@@ -246,7 +246,10 @@ async def upload(args: argparse.Namespace) -> dict[str, Any]:
                 await editors.first.click()
                 await page.keyboard.type(args.description[:2000])
 
-            deadline = time.time() + args.upload_timeout
+            # 等上传完成的时限按文件大小算：固定 15 分钟对 2 GB 的视频不够（9/27 3.8 MB/s 要传十来分钟，
+            # 慢的时候更久）。按 1 MB/s 估，至少 15 分钟、最多 1 小时；命令行给了就用给的。
+            budget = args.upload_timeout or min(3600, max(900, video.stat().st_size / 1_000_000))
+            deadline = time.time() + budget
             last_progress = ""
             while True:
                 text = await page_text(page)
@@ -338,7 +341,7 @@ def main() -> None:
     upload_parser.add_argument("--description", default="")
     upload_parser.add_argument("--tags", default="")
     upload_parser.add_argument("--cover", default="", help="横版封面 jpg/png；同一张图同时用在 4:3 和 16:9")
-    upload_parser.add_argument("--upload-timeout", type=int, default=900)
+    upload_parser.add_argument("--upload-timeout", type=int, default=0, help="秒；不给就按文件大小估")
     upload_parser.add_argument("--form-timeout", type=int, default=120)
 
     args = parser.parse_args()
