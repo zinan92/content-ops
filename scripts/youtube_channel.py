@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path("/Users/wendy")
+ROOT = Path.home()
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_CLIENT_SECRET_CANDIDATES = [
     ROOT / ".config/park/youtube-oauth.json",
     ROOT / ".credentials/youtube.json",
@@ -23,9 +24,9 @@ READ_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
 AUTH_SCOPES = [*SCOPES, READ_SCOPE]
 GCLOUD_ADC_CANDIDATES = [
     ROOT / ".config/gcloud/application_default_credentials.json",
-    ROOT / ".config/gcloud/legacy_credentials/zinan92@hotmail.com/adc.json",
+    *sorted((ROOT / ".config/gcloud/legacy_credentials").glob("*/adc.json")),
 ]
-PROJECT_PYTHON = ROOT / "work/content-ops/.venv/bin/python"
+PROJECT_PYTHON = REPO / ".venv/bin/python"
 
 
 def reexec_in_project_venv() -> None:
@@ -64,7 +65,7 @@ def dependency_error() -> dict[str, Any] | None:
         "ok": False,
         "status": "deps_missing",
         "missing": missing,
-        "install_command": "cd /Users/wendy/work/content-ops && uv venv .venv && uv pip install --python .venv/bin/python google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2",
+        "install_command": f"cd {REPO} && uv venv .venv && uv pip install --python .venv/bin/python google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2",
     }
 
 

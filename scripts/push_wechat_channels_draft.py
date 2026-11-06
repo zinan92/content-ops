@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 import types
@@ -12,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 
-ROOT = Path("/Users/wendy")
-PUBLISH_ROOT = ROOT / "content-toolkit/capabilities/publish"
+ROOT = Path.home()
+PUBLISH_ROOT = Path(os.environ.get("CONTENT_STUDIO_PUBLISH_TOOLKIT") or ROOT / "content-toolkit/capabilities/publish").expanduser()
 DEFAULT_ACCOUNT_FILE = PUBLISH_ROOT / "cookies/tencent_uploader/account.json"
 
 
