@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,8 +14,9 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 
-ROOT = Path("/Users/wendy")
-DEFAULT_ACCOUNT_FILE = ROOT / "content-toolkit/capabilities/publish/cookies/bilibili_creator.json"
+ROOT = Path.home()
+PUBLISH_ROOT = Path(os.environ.get("CONTENT_STUDIO_PUBLISH_TOOLKIT") or ROOT / "content-toolkit/capabilities/publish").expanduser()
+DEFAULT_ACCOUNT_FILE = PUBLISH_ROOT / "cookies/bilibili_creator.json"
 UPLOAD_URL = "https://member.bilibili.com/platform/upload/video/frame"
 MANAGER_URL = "https://member.bilibili.com/platform/upload-manager/article"
 
